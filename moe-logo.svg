@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 160" role="img" aria-label="وزارة التعليم">
+  <title>وزارة التعليم</title>
+  <g fill="#0d7377">
+    <circle cx="140" cy="18" r="5.2"/>
+    <circle cx="122" cy="28" r="4.4"/>
+    <circle cx="158" cy="28" r="4.4"/>
+    <circle cx="106" cy="40" r="5"/>
+    <circle cx="140" cy="38" r="6.2"/>
+    <circle cx="174" cy="40" r="5"/>
+    <circle cx="92" cy="54" r="4.6"/>
+    <circle cx="118" cy="52" r="5.4"/>
+    <circle cx="162" cy="52" r="5.4"/>
+    <circle cx="188" cy="54" r="4.6"/>
+    <circle cx="80" cy="70" r="4.2"/>
+    <circle cx="104" cy="68" r="5"/>
+    <circle cx="140" cy="64" r="6.8"/>
+    <circle cx="176" cy="68" r="5"/>
+    <circle cx="200" cy="70" r="4.2"/>
+  </g>
+  <text x="140" y="112" text-anchor="middle" fill="#0d7377" font-family="Tajawal, Arial, sans-serif" font-size="26" font-weight="800">وزارة التعليم</text>
+  <text x="140" y="138" text-anchor="middle" fill="#0d7377" font-family="Tajawal, Arial, sans-serif" font-size="13" font-weight="600">Ministry of Education</text>
+</svg>
