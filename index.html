@@ -11,7 +11,31 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet" />
     <title>الغياب اليومي</title>
-    <script type="module" crossorigin src="/assets/index-CuviuAWk.js?v=20260903-loginfix"></script>
+    <script>
+      (function () {
+        var BUILD = "20260903-whitefix";
+        try {
+          if (sessionStorage.getItem("da-sw-build") === BUILD) return;
+        } catch (e) {}
+        var finish = function () {
+          try { sessionStorage.setItem("da-sw-build", BUILD); } catch (e) {}
+          location.replace("/?v=" + BUILD);
+        };
+        var tasks = [];
+        if ("serviceWorker" in navigator) {
+          tasks.push(navigator.serviceWorker.getRegistrations().then(function (rs) {
+            return Promise.all(rs.map(function (r) { return r.unregister(); }));
+          }));
+        }
+        if (window.caches) {
+          tasks.push(caches.keys().then(function (ks) {
+            return Promise.all(ks.map(function (k) { return caches.delete(k); }));
+          }));
+        }
+        Promise.all(tasks).then(finish).catch(finish);
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-CuviuAWk.js?v=20260903-whitefix"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-BkjK9RiT.css">
   <link rel="manifest" href="/manifest.webmanifest"></head>
   <body>
