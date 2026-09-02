@@ -41,6 +41,15 @@
           "value": "no-cache"
         }
       ]
+    },
+    {
+      "source": "/assets/index-*.js",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
     }
   ]
 }
