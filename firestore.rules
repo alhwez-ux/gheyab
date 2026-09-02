@@ -1,0 +1,127 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+    function hasProfile() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    function profile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    function isProjectOwner() {
+      return signedIn() && request.auth.token.email.matches('1025774389@.*');
+    }
+    function active() {
+      return isProjectOwner()
+        || (hasProfile() && profile().active == true);
+    }
+    function leadershipRole() {
+      return isProjectOwner()
+        || (hasProfile() && profile().role in [
+          "principal", "vice_principal", "counselor", "absence_employee",
+          "absence_supervisor", "owner"
+        ]);
+    }
+    function accessControl() {
+      return exists(/databases/$(database)/documents/settings/accessControl)
+        ? get(/databases/$(database)/documents/settings/accessControl).data
+        : {};
+    }
+    function leadershipApproved() {
+      return isProjectOwner()
+        || !("leadershipCivilIds" in accessControl())
+        || (hasProfile() && profile().civilId in accessControl().leadershipCivilIds);
+    }
+    function isOwner() {
+      return isProjectOwner()
+        || (hasProfile() && profile().role == "owner" && profile().active == true);
+    }
+    function isAdmin() {
+      return isOwner()
+        || (active() && leadershipRole() && leadershipApproved());
+    }
+    function canAssignClasses() {
+      return isOwner()
+        || (active() && hasProfile() && profile().role in ["principal", "vice_principal"]);
+    }
+    function isTeacher() {
+      return active() && hasProfile() && profile().role == "teacher";
+    }
+    function assignedClasses() {
+      return hasProfile() && profile().assignedClasses is list
+        ? profile().assignedClasses
+        : [];
+    }
+    function teacherClass(data) {
+      return data.classKey is string && data.classKey in assignedClasses();
+    }
+
+    match /users/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId
+        || canAssignClasses();
+      allow create: if isOwner()
+        || (request.auth != null
+          && request.auth.uid == userId
+          && request.resource.data.active == true
+          && request.resource.data.civilId is string
+          && request.auth.token.email.matches(request.resource.data.civilId + '@.*')
+          && request.resource.data.role in [
+            "teacher", "principal", "vice_principal", "counselor",
+            "absence_employee", "absence_supervisor", "owner"
+          ]);
+      allow delete: if isOwner();
+      allow update: if isOwner()
+        || (canAssignClasses()
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(["assignedClasses", "updatedAt"]))
+        || (request.auth.uid == userId
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(["pushTokens", "updatedAt", "mustChangePassword"]));
+    }
+
+    match /students/{studentId} {
+      allow read: if isAdmin() || (isTeacher() && teacherClass(resource.data));
+      allow write: if isAdmin();
+    }
+
+    match /studentPrivate/{studentId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /reports/{reportId} {
+      allow read: if isAdmin()
+        || (isTeacher() && (
+          resource.data.teacherId == request.auth.uid
+          || teacherClass(resource.data)
+        ));
+      allow create: if request.resource.data.teacherId == request.auth.uid && (
+        isAdmin()
+        || (isTeacher() && teacherClass(request.resource.data))
+      );
+      allow update: if isOwner() || isAdmin();
+      allow delete: if isOwner();
+    }
+
+    match /notifications/{id} {
+      allow read: if active() && resource.data.userId == request.auth.uid;
+      allow write: if isAdmin();
+    }
+
+    match /settings/{id} {
+      allow read: if active() && id != "accessControl";
+      allow write: if isAdmin() && id != "accessControl";
+    }
+
+    match /auditLogs/{id} {
+      allow read: if isOwner();
+      allow create: if isOwner();
+    }
+
+    match /scheduledReports/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+  }
+}
