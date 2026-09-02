@@ -43,7 +43,7 @@
       ]
     },
     {
-      "source": "/assets/index-*.js",
+      "source": "/assets/(.*)",
       "headers": [
         {
           "key": "Cache-Control",
