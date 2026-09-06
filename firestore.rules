@@ -123,5 +123,34 @@ service cloud.firestore {
       allow read: if isAdmin();
       allow write: if false;
     }
+
+    match /notes/{noteId} {
+      function noteClass(data) {
+        return data.classKey is string && (
+          isAdmin() || (isTeacher() && data.classKey in assignedClasses())
+        );
+      }
+      allow read: if isAdmin()
+        || (isTeacher() && (
+          resource.data.authorId == request.auth.uid
+          || noteClass(resource.data)
+        ));
+      allow create: if request.resource.data.authorId == request.auth.uid
+        && request.resource.data.content is string
+        && request.resource.data.content.size() >= 3
+        && request.resource.data.subject is string
+        && request.resource.data.studentId is string
+        && noteClass(request.resource.data);
+      allow update: if (
+          isAdmin()
+          || (isTeacher() && resource.data.authorId == request.auth.uid)
+        )
+        && request.resource.data.authorId == resource.data.authorId
+        && request.resource.data.studentId == resource.data.studentId
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["content", "subject", "updatedAt"]);
+      allow delete: if isAdmin()
+        || (isTeacher() && resource.data.authorId == request.auth.uid);
+    }
   }
 }
