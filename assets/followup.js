@@ -33,7 +33,7 @@ const STATUS = {
   early_leave: "استئذان",
 };
 
-let mountedFor = null;
+let started = false;
 let profile = null;
 
 function da() {
@@ -86,6 +86,7 @@ async function fsFetch(path, options = {}) {
   const t = await token();
   const res = await fetch(`${FS}${path}`, {
     ...options,
+    signal: AbortSignal.timeout(20000),
     headers: {
       Authorization: `Bearer ${t}`,
       "Content-Type": "application/json",
@@ -170,15 +171,20 @@ async function loadStudents(user) {
 }
 
 async function loadNotes(user) {
-  if (isAdmin(user.role)) return listByCollection("notes");
-  const keys = user.assignedClasses || [];
-  const batches = await Promise.all([
-    queryEquals("notes", "authorId", user.id),
-    ...keys.map((key) => queryEquals("notes", "classKey", key)),
-  ]);
-  const map = new Map();
-  for (const row of batches.flat()) map.set(row.id, row);
-  return [...map.values()];
+  try {
+    if (isAdmin(user.role)) return listByCollection("notes");
+    const keys = user.assignedClasses || [];
+    const batches = await Promise.all([
+      queryEquals("notes", "authorId", user.id),
+      ...keys.map((key) => queryEquals("notes", "classKey", key)),
+    ]);
+    const map = new Map();
+    for (const row of batches.flat()) map.set(row.id, row);
+    return [...map.values()];
+  } catch (err) {
+    if (/PERMISSION|403|NOT_FOUND|not found/i.test(String(err.message || err))) return [];
+    throw err;
+  }
 }
 
 async function loadAbsences(student) {
@@ -464,8 +470,6 @@ async function printReport(state) {
 }
 
 async function mount(root) {
-  if (mountedFor === root) return;
-  mountedFor = root;
   root.innerHTML = `<p class="fu-empty">جاري تحميل المتابعة...</p>`;
   try {
     await waitForAuth();
@@ -479,19 +483,23 @@ async function mount(root) {
       error: "",
       success: "",
     };
-    render(root, state);
+    const live = document.getElementById("followup-root");
+    if (live) render(live, state);
   } catch (err) {
-    root.innerHTML = `<p class="fu-flash fu-error">${escapeHtml(humanError(err))}</p>`;
-    mountedFor = null;
+    const live = document.getElementById("followup-root");
+    if (live) live.innerHTML = `<p class="fu-flash fu-error">${escapeHtml(humanError(err))}</p>`;
+    started = false;
   }
 }
 
 function waitForAuth() {
   return new Promise((resolve, reject) => {
-    const start = Date.now();
+    const began = Date.now();
     const tick = () => {
       if (da()?.auth?.currentUser) return resolve();
-      if (Date.now() - start > 12000) return reject(new Error("انتظر اكتمال تسجيل الدخول ثم افتح المتابعة"));
+      if (Date.now() - began > 12000) {
+        return reject(new Error(da() ? "انتظر اكتمال تسجيل الدخول ثم افتح المتابعة" : "تعذر ربط المتابعة بنظام الغياب. حدّث الصفحة بـ Ctrl+F5"));
+      }
       setTimeout(tick, 150);
     };
     tick();
@@ -499,14 +507,19 @@ function waitForAuth() {
 }
 
 function watch() {
-  const start = () => {
+  const scan = () => {
     const root = document.getElementById("followup-root");
-    if (root) mount(root);
-    else mountedFor = null;
+    if (!root) {
+      started = false;
+      return;
+    }
+    if (started) return;
+    started = true;
+    mount(root);
   };
-  const observer = new MutationObserver(start);
+  const observer = new MutationObserver(scan);
   observer.observe(document.body, { childList: true, subtree: true });
-  start();
+  scan();
 }
 
 if (document.readyState === "loading") {
