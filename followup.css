@@ -1,0 +1,32 @@
+.fu-wrap{display:grid;gap:16px;padding:4px 2px 28px}
+.fu-lead{margin:0;color:#526e6b;font-weight:700}
+.fu-card,.fu-note{background:#fff;border:1px solid #d9e5e3;border-radius:18px;padding:18px}
+.fu-card h2,.fu-toolbar h2{margin:0 0 14px;font-size:18px}
+.fu-grid{display:grid;gap:12px}
+@media (min-width:720px){.fu-grid{grid-template-columns:1fr 1fr}}
+.fu-card label,.fu-filter{display:grid;gap:7px;color:#526e6b;font-size:13px;font-weight:700}
+.fu-card textarea{min-height:110px;padding:10px 12px;border:1px solid #d9e5e3;border-radius:10px;font:inherit;resize:vertical}
+.fu-actions,.fu-toolbar,.fu-note-top,.fu-note-meta,.fu-note-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.fu-toolbar{justify-content:space-between}
+.fu-btn{min-height:44px;padding:0 16px;border:0;border-radius:12px;background:#0d6f68;color:#fff;font-weight:800}
+.fu-ghost{background:#e7f3f1;color:#0d6f68}
+.fu-btn:disabled{opacity:.5}
+.fu-list{display:grid;gap:12px}
+.fu-note p{margin:10px 0;line-height:1.8}
+.fu-chip{background:#d9f0ed;color:#0d6f68;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:800}
+.fu-note-meta{color:#6b8380;font-size:13px}
+.fu-note-actions button{background:transparent;border:0;color:#0d6f68;font-weight:800;padding:6px}
+.fu-note-actions button[data-delete]{color:#b42318}
+.fu-empty{background:#fff;border-radius:16px;padding:18px;color:#6b8380;text-align:center}
+.fu-flash{margin:0;padding:12px 14px;border-radius:14px;font-weight:700}
+.fu-ok{background:#e8f7ef;color:#116b3a}
+.fu-error{background:#fdecec;color:#b42318}
+.fu-warn{background:#fff6e5;color:#9a6700}
+@media (max-width:860px){.fu-wrap{padding-bottom:24px}}
+.fu-student-login{width:100%;margin-top:14px}
+#fu-student-portal{position:fixed;inset:0;z-index:80;overflow:auto;background:#f4f7f6;padding:20px}
+.fu-student{max-width:820px;margin:0 auto;display:grid;gap:16px}
+.fu-student-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+#followup-root,#homework-root{display:none!important}
+.fu-host[hidden]{display:none!important}
+.fu-host{display:block;position:relative;z-index:3;padding:8px 12px 28px;min-height:280px}
