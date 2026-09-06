@@ -1,0 +1,51 @@
+ارفع محتويات مجلد gheyab إلى GitHub (alhwez-ux/gheyab) ليصل التحديث إلى:
+https://gheyab-six.vercel.app
+
+الإصدار: 20260906-web-sync
+
+========================================
+الملفات المطلوبة للويب (ارفع هذه فقط)
+========================================
+
+index.html
+vercel.json
+sw.js
+manifest.webmanifest
+icon.svg
+moe-logo.svg
+moe-logo.png
+pwa-icon-192.png
+pwa-icon-512.png
+app-brand-circular.jpg
+report-brand.jpg
+
+assets/index-CuviuAWk.js
+assets/index-DaSync9Z.js
+assets/index-BkjK9RiT.css
+assets/workbox-window.prod.es5-BBnX5xw4.js
+assets/pdf.worker.min-CHFwMXne.mjs
+assets/app-brand-circular.jpg
+assets/report-brand.jpg
+assets/pwa-icon-192.png
+assets/pwa-icon-512.png
+
+========================================
+لا ترفع هذه إلى Vercel
+========================================
+
+.git
+http-ensureOwnerAccount.js
+http-loginStaffByCivilId.js
+http-lookupUserByCivilId.js
+firestore.rules
+package.json
+index.js
+_serve.js
+_hash.js
+index-CuviuAWk.js          (نسخة مكررة في الجذر)
+index-DaSync9Z.js
+index-BkjK9RiT.css
+workbox-window.prod.es5-BBnX5xw4.js  (المطلوب داخل assets فقط)
+pdf.worker.min-CHFwMXne.mjs          (المطلوب داخل assets فقط)
+
+بعد الرفع: افتح الموقع ثم Ctrl+F5
