@@ -532,39 +532,40 @@ async function printReport(state) {
   win.print();
 }
 
+function hostFor(kind) {
+  const id = kind === "homework" ? "fu-host-homework" : "fu-host-notes";
+  let host = document.getElementById(id);
+  if (!host) {
+    host = document.createElement("section");
+    host.id = id;
+    host.className = "fu-host";
+    host.hidden = true;
+    const main = document.querySelector("main.content") || document.querySelector("main") || document.body;
+    main.appendChild(host);
+  }
+  return host;
+}
+
 function paintStaff(root, kind, extra = {}) {
-  const live = document.getElementById(root.id);
+  const live = document.getElementById(root.id) || root;
   if (!live || !profile) return;
   renderStaff(live, {
     kind,
     students: extra.students || studentsFromMemory(profile),
     items: extra.items || [],
-    editing: null,
-    selectedStudent: "",
+    editing: extra.editing || null,
+    selectedStudent: extra.selectedStudent || "",
     error: extra.error || "",
-    success: "",
+    success: extra.success || "",
   });
 }
 
 async function mountStaff(root, kind) {
+  const liveRoot = () => document.getElementById(root.id) || root;
   const setMsg = (text) => {
-    const live = document.getElementById(root.id);
-    if (live) live.innerHTML = `<p class="fu-empty">${escapeHtml(text)}</p>`;
+    liveRoot().innerHTML = `<p class="fu-empty">${escapeHtml(text)}</p>`;
   };
   setMsg("جاري التحميل...");
-  let done = false;
-  const finishError = (err) => {
-    const live = document.getElementById(root.id);
-    if (live) live.innerHTML = `<p class="fu-flash fu-error">${escapeHtml(humanError(err))}</p>`;
-    staffStarted[kind] = false;
-  };
-  const watchdog = setTimeout(() => {
-    if (done) return;
-    done = true;
-    profile = profile || getProfile();
-    if (profile) paintStaff(root, kind, { error: "تعذر إكمال التحميل. يمكنك الإضافة من النموذج." });
-    else finishError("تعذر قراءة الحساب. حدّث الصفحة بعد اكتمال تسجيل الدخول.");
-  }, 9000);
   try {
     await waitForAuth();
     profile = getProfile();
@@ -584,28 +585,19 @@ async function mountStaff(root, kind) {
       error = humanError(err);
       if (!students.length) students = studentsFromMemory(profile);
     }
-    if (done) return;
-    done = true;
-    const live = document.getElementById(root.id);
-    if (live) {
-      renderStaff(live, {
-        kind,
-        students,
-        items,
-        editing: null,
-        selectedStudent: "",
-        error,
-        success: "",
-      });
-    }
+    renderStaff(liveRoot(), {
+      kind,
+      students,
+      items,
+      editing: null,
+      selectedStudent: "",
+      error,
+      success: "",
+    });
   } catch (err) {
-    if (done) return;
-    done = true;
     profile = profile || getProfile();
-    if (profile) paintStaff(root, kind, { error: humanError(err) });
-    else finishError(err);
-  } finally {
-    clearTimeout(watchdog);
+    if (profile) paintStaff(liveRoot(), kind, { error: humanError(err) });
+    else liveRoot().innerHTML = `<p class="fu-flash fu-error">${escapeHtml(humanError(err))}</p>`;
   }
 }
 
@@ -615,8 +607,17 @@ function waitForAuth() {
     const tick = () => {
       const ready = da()?.user;
       if (ready && (ready.role || ready.name)) return resolve();
+      if (da()?.auth?.currentUser && Date.now() - began > 400) {
+        const u = da().auth.currentUser;
+        window.__DA.user = window.__DA.user || {
+          id: u.uid,
+          name: u.displayName || "",
+          role: "teacher",
+          assignedClasses: [],
+        };
+        return resolve();
+      }
       if (Date.now() - began > AUTH_WAIT_MS) {
-        if (ready) return resolve();
         return reject(new Error("انتظر اكتمال تسجيل الدخول ثم افتح الصفحة"));
       }
       setTimeout(tick, 80);
@@ -697,18 +698,20 @@ function injectStudentEntry() {
 function watch() {
   const scan = () => {
     injectStudentEntry();
-    const notes = document.getElementById("followup-root");
-    const homework = document.getElementById("homework-root");
-    if (notes && !staffStarted.notes) {
+    const notesOn = document.getElementById("followup-root");
+    const hwOn = document.getElementById("homework-root");
+    const notesHost = hostFor("notes");
+    const hwHost = hostFor("homework");
+    notesHost.hidden = !notesOn;
+    hwHost.hidden = !hwOn;
+    if (notesOn && !staffStarted.notes) {
       staffStarted.notes = true;
-      mountStaff(notes, "notes");
+      mountStaff(notesHost, "notes");
     }
-    if (!notes) staffStarted.notes = false;
-    if (homework && !staffStarted.homework) {
+    if (hwOn && !staffStarted.homework) {
       staffStarted.homework = true;
-      mountStaff(homework, "homework");
+      mountStaff(hwHost, "homework");
     }
-    if (!homework) staffStarted.homework = false;
   };
   new MutationObserver(scan).observe(document.body, { childList: true, subtree: true });
   scan();
