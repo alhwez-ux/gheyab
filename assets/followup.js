@@ -44,7 +44,12 @@ async function token() {
   const auth = da()?.auth;
   const user = auth?.currentUser;
   if (!user) throw new Error("سجّل الدخول أولاً");
-  return user.getIdToken();
+  const cached = user.stsTokenManager?.accessToken || user.accessToken;
+  if (cached) return cached;
+  return Promise.race([
+    user.getIdToken(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("انتهت مهلة قراءة الجلسة")), 8000)),
+  ]);
 }
 
 function decodeValue(val) {
