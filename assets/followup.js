@@ -84,14 +84,12 @@ function encodeFields(data) {
 
 async function fsFetch(path, options = {}) {
   const t = await token();
+  const method = (options.method || "GET").toUpperCase();
+  const headers = { Authorization: `Bearer ${t}` };
+  if (method !== "GET" && method !== "HEAD") headers["Content-Type"] = "application/json";
   const res = await fetch(`${FS}${path}`, {
     ...options,
-    signal: AbortSignal.timeout(20000),
-    headers: {
-      Authorization: `Bearer ${t}`,
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
+    headers: { ...headers, ...(options.headers || {}) },
   });
   const text = await res.text();
   let json = {};
@@ -470,11 +468,17 @@ async function printReport(state) {
 }
 
 async function mount(root) {
-  root.innerHTML = `<p class="fu-empty">جاري تحميل المتابعة...</p>`;
+  const setMsg = (text) => {
+    const live = document.getElementById("followup-root");
+    if (live) live.innerHTML = `<p class="fu-empty">${escapeHtml(text)}</p>`;
+  };
+  setMsg("جاري تحميل المتابعة...");
   try {
     await waitForAuth();
+    setMsg("جاري قراءة الحساب...");
     profile = await getProfile();
     if (!profile) throw new Error("تعذر قراءة حسابك");
+    setMsg("جاري تحميل الطلاب والملاحظات...");
     const state = {
       students: await loadStudents(profile),
       notes: await loadNotes(profile),
