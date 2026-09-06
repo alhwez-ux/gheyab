@@ -1,4 +1,5 @@
 const PROJECT = "tracker-school";
+const API_KEY = "AIzaSyCrjGuSQrSsFTUiBZHnQJCgEBN9LEC3sho";
 const FS = `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents`;
 const ADMINS = [
   "principal",
@@ -32,17 +33,26 @@ const STATUS = {
   late: "متأخر",
   early_leave: "استئذان",
 };
+const EMPTY_NOTES = "ليس هناك أي ملاحظات على الطالب نتمنى له التوفيق";
+const EMPTY_HOMEWORK = "لم يتم إضافة واجب للطالب حتى الآن";
 
-let started = false;
+let staffStarted = { notes: false, homework: false };
 let profile = null;
 
 function da() {
   return window.__DA || null;
 }
 
+function isAdmin(role) {
+  return ADMINS.includes(role);
+}
+
+function civilDigits(value) {
+  return String(value || "").replace(/\D/g, "").slice(0, 10);
+}
+
 async function token() {
-  const auth = da()?.auth;
-  const user = auth?.currentUser;
+  const user = da()?.auth?.currentUser;
   if (!user) throw new Error("سجّل الدخول أولاً");
   const cached = user.stsTokenManager?.accessToken || user.accessToken;
   if (cached) return cached;
@@ -87,15 +97,20 @@ function encodeFields(data) {
   return { fields };
 }
 
-async function fsFetch(path, options = {}) {
-  const t = await token();
+async function fsFetch(path, options = {}, guest = false) {
   const method = (options.method || "GET").toUpperCase();
-  const headers = { Authorization: `Bearer ${t}` };
+  const headers = { ...(options.headers || {}) };
+  let auth = "";
+  try {
+    auth = await token();
+  } catch (err) {
+    if (!guest) throw err;
+  }
+  if (auth) headers.Authorization = `Bearer ${auth}`;
   if (method !== "GET" && method !== "HEAD") headers["Content-Type"] = "application/json";
-  const res = await fetch(`${FS}${path}`, {
-    ...options,
-    headers: { ...headers, ...(options.headers || {}) },
-  });
+  const join = path.includes("?") ? "&" : "?";
+  const url = auth ? `${FS}${path}` : `${FS}${path}${join}key=${API_KEY}`;
+  const res = await fetch(url, { ...options, headers });
   const text = await res.text();
   let json = {};
   try {
@@ -104,23 +119,26 @@ async function fsFetch(path, options = {}) {
     json = { error: { message: text } };
   }
   if (!res.ok) {
-    const msg = json.error?.message || res.statusText || "تعذر الاتصال بقاعدة البيانات";
-    throw new Error(msg);
+    throw new Error(json.error?.message || res.statusText || "تعذر الاتصال بقاعدة البيانات");
   }
   return json;
 }
 
 async function getProfile() {
+  const ready = da()?.user;
+  if (ready && (ready.role || ready.name)) {
+    return {
+      ...ready,
+      id: ready.id || da()?.auth?.currentUser?.uid || "",
+      assignedClasses: ready.assignedClasses || [],
+    };
+  }
   const uid = da()?.auth?.currentUser?.uid;
   if (!uid) return null;
   const doc = await fsFetch(`/users/${uid}`);
   const user = decodeDoc(doc);
   user.id = uid;
   return user;
-}
-
-function isAdmin(role) {
-  return ADMINS.includes(role);
 }
 
 function classLabel(student) {
@@ -137,12 +155,12 @@ function formatWhen(value) {
   }).format(date);
 }
 
-async function listByCollection(name, extra = "") {
-  const json = await fsFetch(`/${name}?pageSize=500${extra}`);
+async function listByCollection(name, guest = false) {
+  const json = await fsFetch(`/${name}?pageSize=500`, {}, guest);
   return (json.documents || []).map(decodeDoc);
 }
 
-async function queryEquals(collectionId, field, value) {
+async function queryEquals(collectionId, field, value, guest = false) {
   const json = await fsFetch(":runQuery", {
     method: "POST",
     body: JSON.stringify({
@@ -157,83 +175,68 @@ async function queryEquals(collectionId, field, value) {
         },
       },
     }),
-  });
+  }, guest);
   return (json || [])
     .map((row) => row.document)
     .filter(Boolean)
     .map(decodeDoc);
 }
 
-async function loadStudents(user) {
+async function loadStudents(user, guest = false, civilId = "") {
+  if (civilId) return queryEquals("students", "civilId", civilId, guest);
   if (isAdmin(user.role)) return listByCollection("students");
   const keys = user.assignedClasses || [];
   const batches = await Promise.all(keys.map((key) => queryEquals("students", "classKey", key)));
-  const map = new Map();
-  for (const row of batches.flat()) map.set(row.id, row);
-  return [...map.values()];
+  return uniqueById(batches.flat());
 }
 
-async function loadNotes(user) {
+async function loadCollectionForUser(name, user, guest = false, civilId = "") {
   try {
-    if (isAdmin(user.role)) return listByCollection("notes");
+    if (civilId) return queryEquals(name, "civilId", civilId, guest);
+    if (isAdmin(user.role)) return listByCollection(name);
     const keys = user.assignedClasses || [];
     const batches = await Promise.all([
-      queryEquals("notes", "authorId", user.id),
-      ...keys.map((key) => queryEquals("notes", "classKey", key)),
+      queryEquals(name, "authorId", user.id),
+      ...keys.map((key) => queryEquals(name, "classKey", key)),
     ]);
-    const map = new Map();
-    for (const row of batches.flat()) map.set(row.id, row);
-    return [...map.values()];
+    return uniqueById(batches.flat());
   } catch (err) {
     if (/PERMISSION|403|NOT_FOUND|not found/i.test(String(err.message || err))) return [];
     throw err;
   }
 }
 
-async function loadAbsences(student) {
-  const reports = isAdmin(profile.role)
-    ? await listByCollection("reports")
-    : (await Promise.all(
-        (profile.assignedClasses || []).map((key) => queryEquals("reports", "classKey", key))
-      )).flat();
-  const rows = [];
-  for (const report of reports) {
-    const entries = await loadEntries(report);
-    for (const entry of entries) {
-      if (entry.studentId !== student.id) continue;
-      if (!entry.status || entry.status === "present") continue;
-      rows.push({
-        date: report.date || "",
-        status: entry.status,
-        time: entry.time || "",
-        teacherName: report.teacherName || "",
-      });
-    }
-  }
-  rows.sort((a, b) => String(b.date).localeCompare(String(a.date)));
-  return rows;
+function uniqueById(rows) {
+  const map = new Map();
+  for (const row of rows) map.set(row.id, row);
+  return [...map.values()];
 }
 
-async function loadEntries(report) {
-  if (Array.isArray(report.entries) && report.entries.length && typeof report.entries[0] === "object") {
-    return report.entries;
-  }
+async function loadAbsences(student) {
   try {
-    const json = await fsFetch(`/reports/${report.id}/entries?pageSize=300`);
-    return (json.documents || []).map(decodeDoc);
+    const reports = isAdmin(profile.role)
+      ? await listByCollection("reports")
+      : (await Promise.all(
+          (profile.assignedClasses || []).map((key) => queryEquals("reports", "classKey", key))
+        )).flat();
+    const rows = [];
+    for (const report of reports) {
+      const entries = Array.isArray(report.entries) ? report.entries : [];
+      for (const entry of entries) {
+        if (entry.studentId !== student.id) continue;
+        if (!entry.status || entry.status === "present") continue;
+        rows.push({
+          date: report.date || "",
+          status: entry.status,
+          time: entry.time || "",
+          teacherName: report.teacherName || "",
+        });
+      }
+    }
+    return rows.sort((a, b) => String(b.date).localeCompare(String(a.date)));
   } catch {
     return [];
   }
-}
-
-function optionList(items, selected, labelFn, valueFn) {
-  return items
-    .map((item) => {
-      const value = valueFn(item);
-      const label = labelFn(item);
-      return `<option value="${escapeAttr(value)}" ${value === selected ? "selected" : ""}>${escapeHtml(label)}</option>`;
-    })
-    .join("");
 }
 
 function escapeHtml(value) {
@@ -244,29 +247,64 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;");
 }
 
-function escapeAttr(value) {
-  return escapeHtml(value);
+function optionList(items, selected, labelFn, valueFn) {
+  return items
+    .map((item) => {
+      const value = valueFn(item);
+      return `<option value="${escapeHtml(value)}" ${value === selected ? "selected" : ""}>${escapeHtml(labelFn(item))}</option>`;
+    })
+    .join("");
 }
 
-function render(root, state) {
+function itemCard(item, canEdit, kind) {
+  return `
+    <article class="fu-note">
+      <div class="fu-note-top">
+        <strong>${escapeHtml(item.studentName || "")}</strong>
+        <span>${escapeHtml(item.grade || "")} / ${escapeHtml(item.classroom || "")}</span>
+        <span class="fu-chip">${escapeHtml(item.subject || "")}</span>
+      </div>
+      <p>${escapeHtml(item.content || "")}</p>
+      <div class="fu-note-meta">
+        <span>المعلم: ${escapeHtml(item.authorName || "")}</span>
+        <span>${escapeHtml(formatWhen(item.createdAt))}</span>
+      </div>
+      ${canEdit ? `
+        <div class="fu-note-actions">
+          <button type="button" data-edit="${escapeHtml(item.id)}" data-kind="${kind}">تعديل</button>
+          <button type="button" data-delete="${escapeHtml(item.id)}" data-kind="${kind}">حذف</button>
+        </div>` : ""}
+    </article>`;
+}
+
+function renderStaff(root, state) {
+  const kind = state.kind;
+  const title = kind === "homework" ? "الواجبات" : "المتابعة";
+  const addTitle = kind === "homework" ? "إضافة واجب" : "إضافة ملاحظة نصية";
+  const editTitle = kind === "homework" ? "تعديل الواجب" : "تعديل ملاحظة";
+  const saveLabel = kind === "homework" ? "حفظ الواجب" : "إضافة ملاحظة";
+  const lead = kind === "homework"
+    ? "يسجّل المعلم الواجب المطلوب من الطالب، ويظهر في شاشة الطالب وتقريره."
+    : "يسجّل المعلم ملاحظة نصية بتاريخ ووقت واسم المعلم، وتظهر كلها في تقرير الطالب.";
   const students = [...state.students].sort((a, b) =>
     `${a.grade}${a.classroom}${a.name}`.localeCompare(`${b.grade}${b.classroom}${b.name}`, "ar")
   );
-  const notes = [...state.notes].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  const rows = [...state.items].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   const editing = state.editing;
   const missingScope = !isAdmin(profile.role) && !(profile.assignedClasses || []).length;
+  const emptyList = kind === "homework" ? EMPTY_HOMEWORK : "لا توجد ملاحظات بعد.";
 
   root.innerHTML = `
     <section class="fu-wrap">
-      <p class="fu-lead">ملاحظات المعلمين تظهر مع غياب الطالب في تقرير واحد للطباعة.</p>
+      <p class="fu-lead">${lead}</p>
       ${state.error ? `<p class="fu-flash fu-error">${escapeHtml(state.error)}</p>` : ""}
       ${state.success ? `<p class="fu-flash fu-ok">${escapeHtml(state.success)}</p>` : ""}
       ${missingScope
-        ? `<p class="fu-flash fu-warn">لم تُسند إليك فصول بعد. راجع الإدارة قبل إضافة الملاحظات.</p>`
+        ? `<p class="fu-flash fu-warn">لم تُسند إليك فصول بعد. راجع الإدارة قبل الإضافة.</p>`
         : `
       <form class="fu-card" data-form>
-        ${editing ? `<input type="hidden" name="id" value="${escapeAttr(editing.id)}">` : ""}
-        <h2>${editing ? "تعديل ملاحظة" : "إضافة ملاحظة نصية"}</h2>
+        ${editing ? `<input type="hidden" name="id" value="${escapeHtml(editing.id)}">` : ""}
+        <h2>${editing ? editTitle : addTitle}</h2>
         <div class="fu-grid">
           <label>الطالب
             <select name="studentId" required ${editing ? "disabled" : ""}>
@@ -281,113 +319,92 @@ function render(root, state) {
             </select>
           </label>
         </div>
-        <label>نص الملاحظة
-          <textarea name="content" required minlength="3" rows="4" placeholder="اكتب الملاحظة النصية هنا">${escapeHtml(editing?.content || "")}</textarea>
+        <label>${kind === "homework" ? "نص الواجب" : "نص الملاحظة"}
+          <textarea name="content" required minlength="3" rows="4">${escapeHtml(editing?.content || "")}</textarea>
         </label>
         <div class="fu-actions">
-          <button type="submit" class="fu-btn">${editing ? "حفظ التعديل" : "إضافة ملاحظة"}</button>
+          <button type="submit" class="fu-btn">${editing ? "حفظ التعديل" : saveLabel}</button>
           ${editing ? `<button type="button" class="fu-btn fu-ghost" data-cancel>إلغاء</button>` : ""}
         </div>
       </form>`}
       <div class="fu-toolbar">
-        <h2>سجل المتابعة</h2>
-        <button type="button" class="fu-btn fu-ghost" data-print ${state.selectedStudent ? "" : "disabled"}>طباعة تقرير الطالب</button>
+        <h2>${title === "الواجبات" ? "سجل الواجبات" : "سجل المتابعة"}</h2>
+        ${kind === "notes" ? `<button type="button" class="fu-btn fu-ghost" data-print ${state.selectedStudent ? "" : "disabled"}>طباعة تقرير الطالب</button>` : ""}
       </div>
+      ${kind === "notes" ? `
       <label class="fu-filter">عرض تقرير طالب
         <select data-report-student>
           <option value="">اختر طالباً للطباعة</option>
           ${optionList(students, state.selectedStudent || "", (s) => `${s.name} — ${classLabel(s)}`, (s) => s.id)}
         </select>
-      </label>
+      </label>` : ""}
       <div class="fu-list">
-        ${notes.length ? notes.map((note) => `
-          <article class="fu-note" data-id="${escapeAttr(note.id)}">
-            <div class="fu-note-top">
-              <strong>${escapeHtml(note.studentName || "")}</strong>
-              <span>${escapeHtml(note.grade || "")} / ${escapeHtml(note.classroom || "")}</span>
-              <span class="fu-chip">${escapeHtml(note.subject || "")}</span>
-            </div>
-            <p>${escapeHtml(note.content || "")}</p>
-            <div class="fu-note-meta">
-              <span>المعلم: ${escapeHtml(note.authorName || "")}</span>
-              <span>${escapeHtml(formatWhen(note.createdAt))}</span>
-            </div>
-            ${(isAdmin(profile.role) || note.authorId === profile.id) ? `
-              <div class="fu-note-actions">
-                <button type="button" data-edit="${escapeAttr(note.id)}">تعديل</button>
-                <button type="button" data-delete="${escapeAttr(note.id)}">حذف</button>
-              </div>` : ""}
-          </article>`).join("") : `<p class="fu-empty">لا توجد ملاحظات بعد.</p>`}
+        ${rows.length
+          ? rows.map((item) => itemCard(item, isAdmin(profile.role) || item.authorId === profile.id, kind)).join("")
+          : `<p class="fu-empty">${emptyList}</p>`}
       </div>
     </section>
   `;
-
-  bind(root, state);
+  bindStaff(root, state);
 }
 
-function bind(root, state) {
-  const form = root.querySelector("[data-form]");
-  form?.addEventListener("submit", async (event) => {
+function bindStaff(root, state) {
+  const collection = state.kind === "homework" ? "homework" : "notes";
+  root.querySelector("[data-form]")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const data = new FormData(form);
+    const data = new FormData(event.currentTarget);
     try {
-      await saveNote(state, {
+      await saveItem(state, collection, {
         id: data.get("id"),
         studentId: data.get("studentId") || state.editing?.studentId,
         subject: String(data.get("subject") || "").trim(),
         content: String(data.get("content") || "").trim(),
       });
       state.editing = null;
-      state.success = "تم حفظ الملاحظة";
+      state.success = state.kind === "homework" ? "تم حفظ الواجب" : "تم حفظ الملاحظة";
       state.error = "";
-      state.notes = await loadNotes(profile);
-      render(root, state);
+      state.items = await loadCollectionForUser(collection, profile);
+      renderStaff(root, state);
     } catch (err) {
       state.error = humanError(err);
       state.success = "";
-      render(root, state);
+      renderStaff(root, state);
     }
   });
-
   root.querySelector("[data-cancel]")?.addEventListener("click", () => {
     state.editing = null;
-    render(root, state);
+    renderStaff(root, state);
   });
-
   root.querySelector("[data-report-student]")?.addEventListener("change", (event) => {
     state.selectedStudent = event.target.value;
-    render(root, state);
+    renderStaff(root, state);
   });
-
   root.querySelector("[data-print]")?.addEventListener("click", () => printReport(state));
-
   root.querySelectorAll("[data-edit]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      state.editing = state.notes.find((note) => note.id === btn.getAttribute("data-edit"));
-      render(root, state);
+      state.editing = state.items.find((item) => item.id === btn.getAttribute("data-edit"));
+      renderStaff(root, state);
     });
   });
-
   root.querySelectorAll("[data-delete]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm("حذف هذه الملاحظة؟")) return;
+      if (!confirm("حذف هذا السجل؟")) return;
       try {
-        await fsFetch(`/notes/${btn.getAttribute("data-delete")}`, { method: "DELETE" });
-        state.notes = await loadNotes(profile);
-        state.success = "تم حذف الملاحظة";
+        await fsFetch(`/${collection}/${btn.getAttribute("data-delete")}`, { method: "DELETE" });
+        state.items = await loadCollectionForUser(collection, profile);
+        state.success = "تم الحذف";
         state.error = "";
-        render(root, state);
+        renderStaff(root, state);
       } catch (err) {
         state.error = humanError(err);
-        render(root, state);
+        renderStaff(root, state);
       }
     });
   });
 }
 
-async function saveNote(state, payload) {
-  const content = payload.content;
-  if (content.length < 3) throw new Error("اكتب نص الملاحظة");
+async function saveItem(state, collection, payload) {
+  if (payload.content.length < 3) throw new Error("اكتب النص أولاً");
   const student = state.students.find((item) => item.id === payload.studentId);
   if (!student) throw new Error("اختر الطالب");
   const now = new Date().toISOString();
@@ -399,14 +416,14 @@ async function saveNote(state, payload) {
     grade: student.grade || "",
     classroom: student.classroom || "",
     subject: payload.subject,
-    content,
+    content: payload.content,
     authorId: profile.id,
     authorName: profile.name || "",
     authorCivilId: profile.civilId || "",
     updatedAt: now,
   };
   if (payload.id) {
-    await fsFetch(`/notes/${payload.id}?updateMask.fieldPaths=subject&updateMask.fieldPaths=content&updateMask.fieldPaths=updatedAt`, {
+    await fsFetch(`/${collection}/${payload.id}?updateMask.fieldPaths=subject&updateMask.fieldPaths=content&updateMask.fieldPaths=updatedAt`, {
       method: "PATCH",
       body: JSON.stringify(encodeFields({
         subject: body.subject,
@@ -417,7 +434,7 @@ async function saveNote(state, payload) {
     return;
   }
   body.createdAt = now;
-  await fsFetch("/notes", {
+  await fsFetch(`/${collection}`, {
     method: "POST",
     body: JSON.stringify(encodeFields(body)),
   });
@@ -426,7 +443,7 @@ async function saveNote(state, payload) {
 function humanError(err) {
   const msg = String(err?.message || err);
   if (/PERMISSION|permission|403/.test(msg)) {
-    return "لا توجد صلاحية لحفظ الملاحظات. حدّث قواعد Firestore لمجموعة notes.";
+    return "لا توجد صلاحية للحفظ. انشر قواعد Firestore لمجموعتي notes و homework.";
   }
   return msg;
 }
@@ -434,13 +451,11 @@ function humanError(err) {
 async function printReport(state) {
   const student = state.students.find((item) => item.id === state.selectedStudent);
   if (!student) return;
-  const notes = state.notes.filter((note) => note.studentId === student.id);
-  let absences = [];
-  try {
-    absences = await loadAbsences(student);
-  } catch {
-    absences = [];
-  }
+  const notes = (state.kind === "notes" ? state.items : await loadCollectionForUser("notes", profile))
+    .filter((item) => item.studentId === student.id);
+  const homework = (state.kind === "homework" ? state.items : await loadCollectionForUser("homework", profile))
+    .filter((item) => item.studentId === student.id);
+  const absences = await loadAbsences(student);
   const win = window.open("", "_blank");
   if (!win) return;
   win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقرير الطالب</title>
@@ -463,41 +478,43 @@ async function printReport(state) {
       <div><small>السجل المدني</small><strong>${escapeHtml(student.civilId || "")}</strong></div>
     </section>
     <h2>الغياب</h2>
-    ${absences.length ? absences.map((item) => `<article><strong>${escapeHtml(item.date)}</strong> — ${escapeHtml(STATUS[item.status] || item.status)} — ${escapeHtml(item.teacherName)}${item.time ? " · " + escapeHtml(item.time) : ""}</article>`).join("") : "<p>لا توجد سجلات غياب.</p>"}
+    ${absences.length ? absences.map((item) => `<article><strong>${escapeHtml(item.date)}</strong> — ${escapeHtml(STATUS[item.status] || item.status)} — ${escapeHtml(item.teacherName)}</article>`).join("") : "<p>لا توجد سجلات غياب.</p>"}
     <h2>ملاحظات المعلمين</h2>
-    ${notes.length ? notes.map((note) => `<article><div class="chip">${escapeHtml(note.subject)}</div><p>${escapeHtml(note.content)}</p><small>المعلم: ${escapeHtml(note.authorName)} — ${escapeHtml(formatWhen(note.createdAt))}</small></article>`).join("") : "<p>لا توجد ملاحظات مسجّلة لهذا الطالب حتى الآن.</p>"}
+    ${notes.length ? notes.map((note) => `<article><div class="chip">${escapeHtml(note.subject)}</div><p>${escapeHtml(note.content)}</p><small>المعلم: ${escapeHtml(note.authorName)} — ${escapeHtml(formatWhen(note.createdAt))}</small></article>`).join("") : `<p>${EMPTY_NOTES}</p>`}
+    <h2>الواجبات</h2>
+    ${homework.length ? homework.map((item) => `<article><div class="chip">${escapeHtml(item.subject)}</div><p>${escapeHtml(item.content)}</p><small>المعلم: ${escapeHtml(item.authorName)} — ${escapeHtml(formatWhen(item.createdAt))}</small></article>`).join("") : `<p>${EMPTY_HOMEWORK}</p>`}
     </body></html>`);
   win.document.close();
   win.focus();
   win.print();
 }
 
-async function mount(root) {
+async function mountStaff(root, kind) {
   const setMsg = (text) => {
-    const live = document.getElementById("followup-root");
+    const live = document.getElementById(root.id);
     if (live) live.innerHTML = `<p class="fu-empty">${escapeHtml(text)}</p>`;
   };
-  setMsg("جاري تحميل المتابعة...");
+  setMsg("جاري التحميل...");
   try {
     await waitForAuth();
-    setMsg("جاري قراءة الحساب...");
     profile = await getProfile();
     if (!profile) throw new Error("تعذر قراءة حسابك");
-    setMsg("جاري تحميل الطلاب والملاحظات...");
+    const collection = kind === "homework" ? "homework" : "notes";
     const state = {
+      kind,
       students: await loadStudents(profile),
-      notes: await loadNotes(profile),
+      items: await loadCollectionForUser(collection, profile),
       editing: null,
       selectedStudent: "",
       error: "",
       success: "",
     };
-    const live = document.getElementById("followup-root");
-    if (live) render(live, state);
+    const live = document.getElementById(root.id);
+    if (live) renderStaff(live, state);
   } catch (err) {
-    const live = document.getElementById("followup-root");
+    const live = document.getElementById(root.id);
     if (live) live.innerHTML = `<p class="fu-flash fu-error">${escapeHtml(humanError(err))}</p>`;
-    started = false;
+    staffStarted[kind] = false;
   }
 }
 
@@ -505,9 +522,9 @@ function waitForAuth() {
   return new Promise((resolve, reject) => {
     const began = Date.now();
     const tick = () => {
-      if (da()?.auth?.currentUser) return resolve();
+      if (da()?.user || da()?.auth?.currentUser) return resolve();
       if (Date.now() - began > 12000) {
-        return reject(new Error(da() ? "انتظر اكتمال تسجيل الدخول ثم افتح المتابعة" : "تعذر ربط المتابعة بنظام الغياب. حدّث الصفحة بـ Ctrl+F5"));
+        return reject(new Error("انتظر اكتمال تسجيل الدخول ثم افتح الصفحة"));
       }
       setTimeout(tick, 150);
     };
@@ -515,24 +532,94 @@ function waitForAuth() {
   });
 }
 
+function renderStudent(box, student, notes, homework) {
+  box.innerHTML = `
+    <section class="fu-student">
+      <div class="fu-student-head">
+        <div>
+          <p class="fu-lead">شاشة الطالب</p>
+          <h2>${escapeHtml(student.name || "")}</h2>
+          <p>${escapeHtml(classLabel(student))} · ${escapeHtml(student.civilId || "")}</p>
+        </div>
+        <button type="button" class="fu-btn fu-ghost" data-student-close>رجوع</button>
+      </div>
+      <section class="fu-card">
+        <h2>الملاحظات</h2>
+        ${notes.length ? notes.map((item) => itemCard(item, false, "notes")).join("") : `<p class="fu-empty">${EMPTY_NOTES}</p>`}
+      </section>
+      <section class="fu-card">
+        <h2>الواجبات</h2>
+        ${homework.length ? homework.map((item) => itemCard(item, false, "homework")).join("") : `<p class="fu-empty">${EMPTY_HOMEWORK}</p>`}
+      </section>
+    </section>
+  `;
+  box.querySelector("[data-student-close]")?.addEventListener("click", () => box.remove());
+}
+
+async function openStudentPortal(civilId) {
+  const id = civilDigits(civilId);
+  if (id.length !== 10) {
+    alert("أدخل السجل المدني المكون من 10 أرقام");
+    return;
+  }
+  let box = document.getElementById("fu-student-portal");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "fu-student-portal";
+    document.body.appendChild(box);
+  }
+  box.innerHTML = `<section class="fu-student"><p class="fu-empty">جاري عرض ملاحظاتك وواجباتك...</p></section>`;
+  try {
+    const students = await loadStudents({}, true, id);
+    const student = students[0];
+    if (!student) throw new Error("لا يوجد طالب بهذا السجل المدني");
+    const notes = await loadCollectionForUser("notes", {}, true, id);
+    const homework = await loadCollectionForUser("homework", {}, true, id);
+    renderStudent(box, student, notes, homework);
+  } catch (err) {
+    box.innerHTML = `
+      <section class="fu-student">
+        <p class="fu-flash fu-error">${escapeHtml(humanError(err))}</p>
+        <button type="button" class="fu-btn fu-ghost" data-student-close>رجوع</button>
+      </section>`;
+    box.querySelector("[data-student-close]")?.addEventListener("click", () => box.remove());
+  }
+}
+
+function injectStudentEntry() {
+  const card = document.querySelector(".auth-card");
+  if (!card || card.querySelector("[data-student-login]")) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "fu-btn fu-ghost fu-student-login";
+  btn.setAttribute("data-student-login", "1");
+  btn.textContent = "دخول الطالب للملاحظات والواجبات";
+  btn.addEventListener("click", () => {
+    const input = card.querySelector('input[name="username"]');
+    openStudentPortal(input?.value || prompt("أدخل السجل المدني للطالب") || "");
+  });
+  card.appendChild(btn);
+}
+
 function watch() {
   const scan = () => {
-    const root = document.getElementById("followup-root");
-    if (!root) {
-      started = false;
-      return;
+    injectStudentEntry();
+    const notes = document.getElementById("followup-root");
+    const homework = document.getElementById("homework-root");
+    if (notes && !staffStarted.notes) {
+      staffStarted.notes = true;
+      mountStaff(notes, "notes");
     }
-    if (started) return;
-    started = true;
-    mount(root);
+    if (!notes) staffStarted.notes = false;
+    if (homework && !staffStarted.homework) {
+      staffStarted.homework = true;
+      mountStaff(homework, "homework");
+    }
+    if (!homework) staffStarted.homework = false;
   };
-  const observer = new MutationObserver(scan);
-  observer.observe(document.body, { childList: true, subtree: true });
+  new MutationObserver(scan).observe(document.body, { childList: true, subtree: true });
   scan();
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", watch);
-} else {
-  watch();
-}
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", watch);
+else watch();
