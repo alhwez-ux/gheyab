@@ -47,19 +47,41 @@ function isAdmin(role) {
   return ADMINS.includes(role);
 }
 
+const FETCH_MS = 8000;
+const AUTH_WAIT_MS = 8000;
+
 function civilDigits(value) {
   return String(value || "").replace(/\D/g, "").slice(0, 10);
 }
 
-async function token() {
+function memoryToken(user) {
+  if (!user || typeof user !== "object") return "";
+  const fromMgr = (mgr) => (mgr && typeof mgr === "object" && mgr.accessToken) || "";
+  return (
+    user.accessToken ||
+    fromMgr(user.stsTokenManager) ||
+    user._lat ||
+    (user._delegate && (user._delegate.accessToken || fromMgr(user._delegate.stsTokenManager) || user._delegate._lat)) ||
+    ""
+  );
+}
+
+function token() {
   const user = da()?.auth?.currentUser;
   if (!user) throw new Error("سجّل الدخول أولاً");
-  const cached = user.stsTokenManager?.accessToken || user.accessToken;
-  if (cached) return cached;
+  const cached = memoryToken(user);
+  if (cached) return Promise.resolve(cached);
+  if (typeof user.getIdToken !== "function") throw new Error("انتهت مهلة قراءة الجلسة");
   return Promise.race([
-    user.getIdToken(),
-    new Promise((_, reject) => setTimeout(() => reject(new Error("انتهت مهلة قراءة الجلسة")), 8000)),
+    user.getIdToken(false),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("انتهت مهلة قراءة الجلسة")), 1500)),
   ]);
+}
+
+function timedFetch(url, options, ms = FETCH_MS) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...options, signal: ctrl.signal }).finally(() => clearTimeout(timer));
 }
 
 function decodeValue(val) {
@@ -100,6 +122,8 @@ function encodeFields(data) {
 async function fsFetch(path, options = {}, guest = false) {
   const method = (options.method || "GET").toUpperCase();
   const headers = { ...(options.headers || {}) };
+  delete headers["Content-Type"];
+  delete headers["content-type"];
   let auth = "";
   try {
     auth = await token();
@@ -107,10 +131,20 @@ async function fsFetch(path, options = {}, guest = false) {
     if (!guest) throw err;
   }
   if (auth) headers.Authorization = `Bearer ${auth}`;
-  if (method !== "GET" && method !== "HEAD") headers["Content-Type"] = "application/json";
+  if (method !== "GET" && method !== "HEAD" && method !== "DELETE") {
+    headers["Content-Type"] = "application/json";
+  }
   const join = path.includes("?") ? "&" : "?";
   const url = auth ? `${FS}${path}` : `${FS}${path}${join}key=${API_KEY}`;
-  const res = await fetch(url, { ...options, headers });
+  const rest = { ...options };
+  delete rest.headers;
+  let res;
+  try {
+    res = await timedFetch(url, { ...rest, method, headers });
+  } catch (err) {
+    if (err?.name === "AbortError") throw new Error("انتهت مهلة الاتصال بقاعدة البيانات");
+    throw err;
+  }
   const text = await res.text();
   let json = {};
   try {
@@ -124,21 +158,25 @@ async function fsFetch(path, options = {}, guest = false) {
   return json;
 }
 
-async function getProfile() {
+function getProfile() {
   const ready = da()?.user;
   if (ready && (ready.role || ready.name)) {
     return {
       ...ready,
       id: ready.id || da()?.auth?.currentUser?.uid || "",
-      assignedClasses: ready.assignedClasses || [],
+      assignedClasses: Array.isArray(ready.assignedClasses) ? ready.assignedClasses : [],
     };
   }
-  const uid = da()?.auth?.currentUser?.uid;
-  if (!uid) return null;
-  const doc = await fsFetch(`/users/${uid}`);
-  const user = decodeDoc(doc);
-  user.id = uid;
-  return user;
+  return null;
+}
+
+function studentsFromMemory(user) {
+  const all = Array.isArray(da()?.data?.students) ? da().data.students : [];
+  if (!all.length || !user) return [];
+  if (isAdmin(user.role)) return all.slice();
+  const keys = new Set(user.assignedClasses || []);
+  if (!keys.size) return [];
+  return all.filter((s) => keys.has(s.classKey || `${s.grade || ""}|${s.classroom || s.section || ""}`));
 }
 
 function classLabel(student) {
@@ -184,6 +222,8 @@ async function queryEquals(collectionId, field, value, guest = false) {
 
 async function loadStudents(user, guest = false, civilId = "") {
   if (civilId) return queryEquals("students", "civilId", civilId, guest);
+  const cached = studentsFromMemory(user);
+  if (cached.length) return cached;
   if (isAdmin(user.role)) return listByCollection("students");
   const keys = user.assignedClasses || [];
   const batches = await Promise.all(keys.map((key) => queryEquals("students", "classKey", key)));
@@ -445,6 +485,9 @@ function humanError(err) {
   if (/PERMISSION|permission|403/.test(msg)) {
     return "لا توجد صلاحية للحفظ. انشر قواعد Firestore لمجموعتي notes و homework.";
   }
+  if (/abort|timeout|مهلة|Failed to fetch|NetworkError|Load failed/i.test(msg)) {
+    return "تعذر الاتصال بقاعدة البيانات. يمكنك الإضافة من النموذج أو انشر قواعد Firestore ثم أعد المحاولة.";
+  }
   return msg;
 }
 
@@ -489,32 +532,80 @@ async function printReport(state) {
   win.print();
 }
 
+function paintStaff(root, kind, extra = {}) {
+  const live = document.getElementById(root.id);
+  if (!live || !profile) return;
+  renderStaff(live, {
+    kind,
+    students: extra.students || studentsFromMemory(profile),
+    items: extra.items || [],
+    editing: null,
+    selectedStudent: "",
+    error: extra.error || "",
+    success: "",
+  });
+}
+
 async function mountStaff(root, kind) {
   const setMsg = (text) => {
     const live = document.getElementById(root.id);
     if (live) live.innerHTML = `<p class="fu-empty">${escapeHtml(text)}</p>`;
   };
   setMsg("جاري التحميل...");
-  try {
-    await waitForAuth();
-    profile = await getProfile();
-    if (!profile) throw new Error("تعذر قراءة حسابك");
-    const collection = kind === "homework" ? "homework" : "notes";
-    const state = {
-      kind,
-      students: await loadStudents(profile),
-      items: await loadCollectionForUser(collection, profile),
-      editing: null,
-      selectedStudent: "",
-      error: "",
-      success: "",
-    };
-    const live = document.getElementById(root.id);
-    if (live) renderStaff(live, state);
-  } catch (err) {
+  let done = false;
+  const finishError = (err) => {
     const live = document.getElementById(root.id);
     if (live) live.innerHTML = `<p class="fu-flash fu-error">${escapeHtml(humanError(err))}</p>`;
     staffStarted[kind] = false;
+  };
+  const watchdog = setTimeout(() => {
+    if (done) return;
+    done = true;
+    profile = profile || getProfile();
+    if (profile) paintStaff(root, kind, { error: "تعذر إكمال التحميل. يمكنك الإضافة من النموذج." });
+    else finishError("تعذر قراءة الحساب. حدّث الصفحة بعد اكتمال تسجيل الدخول.");
+  }, 9000);
+  try {
+    await waitForAuth();
+    profile = getProfile();
+    if (!profile) throw new Error("تعذر قراءة حسابك. حدّث الصفحة بعد اكتمال تسجيل الدخول.");
+    const collection = kind === "homework" ? "homework" : "notes";
+    let students = studentsFromMemory(profile);
+    let items = [];
+    let error = "";
+    try {
+      const [st, it] = await Promise.all([
+        students.length ? Promise.resolve(students) : loadStudents(profile),
+        loadCollectionForUser(collection, profile),
+      ]);
+      students = st;
+      items = it;
+    } catch (err) {
+      error = humanError(err);
+      if (!students.length) students = studentsFromMemory(profile);
+    }
+    if (done) return;
+    done = true;
+    const live = document.getElementById(root.id);
+    if (live) {
+      renderStaff(live, {
+        kind,
+        students,
+        items,
+        editing: null,
+        selectedStudent: "",
+        error,
+        success: "",
+      });
+    }
+  } catch (err) {
+    if (done) return;
+    done = true;
+    profile = profile || getProfile();
+    if (profile) paintStaff(root, kind, { error: humanError(err) });
+    else finishError(err);
+  } finally {
+    clearTimeout(watchdog);
   }
 }
 
@@ -522,11 +613,13 @@ function waitForAuth() {
   return new Promise((resolve, reject) => {
     const began = Date.now();
     const tick = () => {
-      if (da()?.user || da()?.auth?.currentUser) return resolve();
-      if (Date.now() - began > 12000) {
+      const ready = da()?.user;
+      if (ready && (ready.role || ready.name)) return resolve();
+      if (Date.now() - began > AUTH_WAIT_MS) {
+        if (ready) return resolve();
         return reject(new Error("انتظر اكتمال تسجيل الدخول ثم افتح الصفحة"));
       }
-      setTimeout(tick, 150);
+      setTimeout(tick, 80);
     };
     tick();
   });
