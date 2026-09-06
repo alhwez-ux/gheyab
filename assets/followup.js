@@ -482,8 +482,11 @@ async function saveItem(state, collection, payload) {
 
 function humanError(err) {
   const msg = String(err?.message || err);
-  if (/PERMISSION|permission|403/.test(msg)) {
-    return "لا توجد صلاحية للحفظ. انشر قواعد Firestore لمجموعتي notes و homework.";
+  if (/Quota|RESOURCE_EXHAUSTED|quota/i.test(msg)) {
+    return "تم تجاوز حد استخدام قاعدة البيانات مؤقتاً. النموذج ظاهر ويمكنك الإضافة بعد قليل.";
+  }
+  if (/PERMISSION|permission|403|Missing or insufficient/i.test(msg)) {
+    return "تعذر قراءة السجل من قاعدة البيانات. تحقق من نشر قواعد Firestore أو حد الاستخدام.";
   }
   if (/abort|timeout|مهلة|Failed to fetch|NetworkError|Load failed/i.test(msg)) {
     return "تعذر الاتصال بقاعدة البيانات. يمكنك الإضافة من النموذج أو انشر قواعد Firestore ثم أعد المحاولة.";
@@ -535,15 +538,35 @@ async function printReport(state) {
 function hostFor(kind) {
   const id = kind === "homework" ? "fu-host-homework" : "fu-host-notes";
   let host = document.getElementById(id);
+  const main = document.querySelector("main.content") || document.querySelector("main") || document.body;
+  const header = main.querySelector("header.topbar") || main.querySelector("header");
   if (!host) {
     host = document.createElement("section");
     host.id = id;
     host.className = "fu-host";
     host.hidden = true;
-    const main = document.querySelector("main.content") || document.querySelector("main") || document.body;
-    main.appendChild(host);
+  }
+  if (header) {
+    if (host.previousElementSibling !== header) header.after(host);
+  } else if (host.parentNode !== main) {
+    main.prepend(host);
   }
   return host;
+}
+
+function hideReactPageSiblings(overlayOn) {
+  const main = document.querySelector("main.content") || document.querySelector("main");
+  if (!main) return;
+  for (const child of [...main.children]) {
+    if (child.tagName === "HEADER" || child.classList.contains("fu-host")) continue;
+    if (overlayOn) {
+      if (!child.hasAttribute("data-fu-hide")) child.setAttribute("data-fu-hide", child.style.display);
+      child.style.display = "none";
+    } else if (child.hasAttribute("data-fu-hide")) {
+      child.style.display = child.getAttribute("data-fu-hide") || "";
+      child.removeAttribute("data-fu-hide");
+    }
+  }
 }
 
 function paintStaff(root, kind, extra = {}) {
@@ -704,11 +727,12 @@ function watch() {
     const hwHost = hostFor("homework");
     notesHost.hidden = !notesOn;
     hwHost.hidden = !hwOn;
-    if (notesOn && !staffStarted.notes) {
+    hideReactPageSiblings(Boolean(notesOn || hwOn));
+    if (notesOn && (!staffStarted.notes || !notesHost.childElementCount)) {
       staffStarted.notes = true;
       mountStaff(notesHost, "notes");
     }
-    if (hwOn && !staffStarted.homework) {
+    if (hwOn && (!staffStarted.homework || !hwHost.childElementCount)) {
       staffStarted.homework = true;
       mountStaff(hwHost, "homework");
     }
