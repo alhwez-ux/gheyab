@@ -81,20 +81,8 @@ service cloud.firestore {
             .hasOnly(["pushTokens", "updatedAt", "mustChangePassword"]));
     }
 
-    function civilIdSelf(data) {
-      return signedIn()
-        && data.civilId is string
-        && request.auth.token.email.matches(data.civilId + '@.*');
-    }
-    function portalCivilId(data) {
-      return data.civilId is string && data.civilId.size() == 10;
-    }
-
     match /students/{studentId} {
-      allow read: if isAdmin()
-        || (isTeacher() && teacherClass(resource.data))
-        || civilIdSelf(resource.data)
-        || portalCivilId(resource.data);
+      allow read: if isAdmin() || (isTeacher() && teacherClass(resource.data));
       allow write: if isAdmin();
     }
 
@@ -134,68 +122,6 @@ service cloud.firestore {
     match /scheduledReports/{id} {
       allow read: if isAdmin();
       allow write: if false;
-    }
-
-    match /notes/{noteId} {
-      function noteClass(data) {
-        return data.classKey is string && (
-          isAdmin() || (isTeacher() && data.classKey in assignedClasses())
-        );
-      }
-      allow read: if isAdmin()
-        || (isTeacher() && (
-          resource.data.authorId == request.auth.uid
-          || noteClass(resource.data)
-        ))
-        || civilIdSelf(resource.data)
-        || portalCivilId(resource.data);
-      allow create: if request.resource.data.authorId == request.auth.uid
-        && request.resource.data.content is string
-        && request.resource.data.content.size() >= 3
-        && request.resource.data.subject is string
-        && request.resource.data.studentId is string
-        && noteClass(request.resource.data);
-      allow update: if (
-          isAdmin()
-          || (isTeacher() && resource.data.authorId == request.auth.uid)
-        )
-        && request.resource.data.authorId == resource.data.authorId
-        && request.resource.data.studentId == resource.data.studentId
-        && request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(["content", "subject", "updatedAt"]);
-      allow delete: if isAdmin()
-        || (isTeacher() && resource.data.authorId == request.auth.uid);
-    }
-
-    match /homework/{itemId} {
-      function workClass(data) {
-        return data.classKey is string && (
-          isAdmin() || (isTeacher() && data.classKey in assignedClasses())
-        );
-      }
-      allow read: if isAdmin()
-        || (isTeacher() && (
-          resource.data.authorId == request.auth.uid
-          || workClass(resource.data)
-        ))
-        || civilIdSelf(resource.data)
-        || portalCivilId(resource.data);
-      allow create: if request.resource.data.authorId == request.auth.uid
-        && request.resource.data.content is string
-        && request.resource.data.content.size() >= 3
-        && request.resource.data.subject is string
-        && request.resource.data.studentId is string
-        && workClass(request.resource.data);
-      allow update: if (
-          isAdmin()
-          || (isTeacher() && resource.data.authorId == request.auth.uid)
-        )
-        && request.resource.data.authorId == resource.data.authorId
-        && request.resource.data.studentId == resource.data.studentId
-        && request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(["content", "subject", "updatedAt"]);
-      allow delete: if isAdmin()
-        || (isTeacher() && resource.data.authorId == request.auth.uid);
     }
   }
 }
