@@ -1,7 +1,7 @@
 ارفع محتويات مجلد gheyab إلى GitHub (alhwez-ux/gheyab) ليصل التحديث إلى:
 https://gheyab-six.vercel.app
 
-الإصدار: 20260909-noor1
+الإصدار: 20260909-login1
 
 ========================================
 الملفات المطلوبة للويب (ارفع هذه فقط)
@@ -22,6 +22,8 @@ report-brand.jpg
 assets/index-CuviuAWk.js
 assets/index-DaSync9Z.js
 assets/index-BkjK9RiT.css
+assets/followup.js
+assets/followup.css
 assets/workbox-window.prod.es5-BBnX5xw4.js
 assets/pdf.worker.min-CHFwMXne.mjs
 assets/app-brand-circular.jpg
