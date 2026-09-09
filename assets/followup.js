@@ -698,18 +698,7 @@ async function openStudentPortal(civilId) {
 }
 
 function injectStudentEntry() {
-  const card = document.querySelector(".auth-card");
-  if (!card || card.querySelector("[data-student-login]")) return;
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "fu-btn fu-ghost fu-student-login";
-  btn.setAttribute("data-student-login", "1");
-  btn.textContent = "دخول الطالب للملاحظات والواجبات";
-  btn.addEventListener("click", () => {
-    const input = card.querySelector('input[name="username"]');
-    openStudentPortal(input?.value || prompt("أدخل السجل المدني للطالب") || "");
-  });
-  card.appendChild(btn);
+  document.querySelectorAll("[data-student-login]").forEach((btn) => btn.remove());
 }
 
 function watch() {
