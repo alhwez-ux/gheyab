@@ -46,6 +46,9 @@ service cloud.firestore {
       return isOwner()
         || (active() && hasProfile() && profile().role in ["principal", "vice_principal"]);
     }
+    function canManagePeople() {
+      return canAssignClasses();
+    }
     function isTeacher() {
       return active() && hasProfile() && profile().role == "teacher";
     }
@@ -62,6 +65,11 @@ service cloud.firestore {
       allow read: if request.auth != null && request.auth.uid == userId
         || canAssignClasses();
       allow create: if isOwner()
+        || (canManagePeople()
+          && request.resource.data.role in [
+            "teacher", "principal", "vice_principal", "counselor",
+            "absence_employee", "absence_supervisor"
+          ])
         || (request.auth != null
           && request.auth.uid == userId
           && request.resource.data.active == true
@@ -71,8 +79,12 @@ service cloud.firestore {
             "teacher", "principal", "vice_principal", "counselor",
             "absence_employee", "absence_supervisor", "owner"
           ]);
-      allow delete: if isOwner();
+      allow delete: if isOwner()
+        || (canManagePeople() && resource.data.role != "owner");
       allow update: if isOwner()
+        || (canManagePeople()
+          && resource.data.role != "owner"
+          && request.resource.data.role != "owner")
         || (canAssignClasses()
           && request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(["assignedClasses", "updatedAt"]))
@@ -83,7 +95,7 @@ service cloud.firestore {
 
     match /students/{studentId} {
       allow read: if isAdmin() || (isTeacher() && teacherClass(resource.data));
-      allow write: if isAdmin();
+      allow write: if canManagePeople();
     }
 
     match /studentPrivate/{studentId} {
