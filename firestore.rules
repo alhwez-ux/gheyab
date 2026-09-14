@@ -90,7 +90,7 @@ service cloud.firestore {
             .hasOnly(["assignedClasses", "updatedAt"]))
         || (request.auth.uid == userId
           && request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(["pushTokens", "updatedAt", "mustChangePassword"]));
+            .hasOnly(["pushTokens", "updatedAt", "mustChangePassword", "loginPin"]));
     }
 
     match /students/{studentId} {
