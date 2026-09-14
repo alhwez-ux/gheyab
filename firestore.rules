@@ -98,8 +98,35 @@ service cloud.firestore {
       allow write: if canManagePeople();
     }
 
-    match /studentPrivate/{studentId} {
-      allow read, write: if isAdmin();
+        match /studentPrivate/{studentId} {
+      allow read: if isAdmin()
+        || (active() && hasProfile() && (
+          profile().role == "vice_principal"
+          || profile().canSendWhatsApp == true
+        ));
+      allow create: if isAdmin()
+        || (active() && hasProfile() && (
+          profile().role == "vice_principal"
+          || profile().canSendWhatsApp == true
+        )
+        && request.resource.data.keys().hasOnly(["parentPhone", "civilId", "updatedAt"]));
+      allow update: if isAdmin()
+        || (active() && hasProfile() && (
+          profile().role == "vice_principal"
+          || profile().canSendWhatsApp == true
+        )
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["parentPhone", "civilId", "updatedAt"]));
+      allow delete: if isAdmin();
+    }
+
+    match /whatsappTemplates/{id} {
+      allow read: if active();
+      allow create, update, delete: if isAdmin()
+        || (active() && hasProfile() && (
+          profile().role in ["owner", "principal", "vice_principal"]
+          || profile().canSendWhatsApp == true
+        ));
     }
 
     match /reports/{reportId} {

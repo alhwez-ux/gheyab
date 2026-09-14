@@ -534,8 +534,554 @@ async function printReport(state) {
   win.print();
 }
 
+const SCHOOL_WHATSAPP_PHONE = "0555149545";
+
+function arabicDigits(value) {
+  return String(value || "").replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)));
+}
+
+function normalizeSaudiPhone(value) {
+  let digits = arabicDigits(value).replace(/\D/g, "");
+  if (digits.startsWith("00966")) digits = digits.slice(2);
+  if (digits.startsWith("966") && digits.length === 12) return digits;
+  if (digits.startsWith("05") && digits.length === 10) return `966${digits.slice(1)}`;
+  if (digits.startsWith("5") && digits.length === 9) return `966${digits}`;
+  if (digits.startsWith("0") && digits.length === 10) return `966${digits.slice(1)}`;
+  return "";
+}
+
+function formatLocalPhone(value) {
+  const international = normalizeSaudiPhone(value);
+  return international ? `0${international.slice(3)}` : String(value || "").trim();
+}
+
+function whatsappHref(phone, text) {
+  const international = normalizeSaudiPhone(phone);
+  if (!international) return "";
+  return `https://wa.me/${international}?text=${encodeURIComponent(text)}`;
+}
+
+function todayIso() {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
+function formatHijri(iso) {
+  const date = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return iso;
+  return new Intl.DateTimeFormat("ar-SA-u-ca-islamic", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(date);
+}
+
+function noticeBodyText(student, date) {
+  return applyWaTemplate(DEFAULT_WA_TEMPLATE.text, student, date);
+}
+
+function officialNoticeText(student, date, body) {
+  const inner = String(body || noticeBodyText(student, date)).trim();
+  if (inner.includes("ابتدائية هارون الرشيد") && inner.includes("إدارة المدرسة")) return inner;
+  return [
+    "وزارة التعليم",
+    "ابتدائية هارون الرشيد",
+    "إشعار غياب طالب",
+    "",
+    inner,
+    "",
+    "إدارة المدرسة",
+  ].join("\n");
+}
+
+function absenceWhatsAppText(student, date) {
+  return officialNoticeText(student, date);
+}
+
+function officialNoticeCard(student, date, body) {
+  const filled = escapeHtml(String(body || noticeBodyText(student, date)).trim()).replace(/\n/g, "<br>");
+  return `
+    <article class="wa-notice">
+      <header class="wa-notice-head">
+        <img src="/moe-logo.svg" alt="وزارة التعليم" class="wa-moe">
+        <p class="wa-school">ابتدائية هارون الرشيد</p>
+        <h3>إشعار غياب طالب</h3>
+      </header>
+      <div class="wa-notice-body">${filled}</div>
+      <footer class="wa-notice-foot">إدارة المدرسة</footer>
+    </article>`;
+}
+
+function printOfficialNotice(student, date, body) {
+  const win = window.open("", "_blank", "noopener,noreferrer");
+  if (!win) return;
+  win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>إشعار غياب طالب</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700;800&display=swap" rel="stylesheet">
+    <style>
+      body{font-family:Tajawal,sans-serif;margin:0;padding:24px;color:#173c3a}
+      .wa-notice{max-width:520px;margin:0 auto;border:2px solid #0d7377;border-radius:18px;padding:28px 24px;text-align:center}
+      .wa-moe{width:180px;height:auto;margin:0 auto 8px;display:block}
+      .wa-school{margin:0;font-size:22px;font-weight:800;color:#0d7377}
+      .wa-notice-head h3{margin:8px 0 18px;font-size:20px}
+      .wa-notice-body{text-align:right;line-height:2;font-size:16px;min-height:120px}
+      .wa-notice-foot{margin-top:28px;font-weight:800;font-size:18px}
+    </style></head><body>${officialNoticeCard(student, date, body)}</body></html>`);
+  win.document.close();
+  win.focus();
+  win.print();
+}
+
+function featureEnabled() {
+  return da()?.data?.settings?.whatsappEnabled === true;
+}
+
+function isOwnerUser(user) {
+  return (user && user.role === "owner") || false;
+}
+
+function canSendWhatsApp(user) {
+  if (!user || !featureEnabled()) return false;
+  if (user.role === "vice_principal") return true;
+  return user.canSendWhatsApp === true;
+}
+
+function canGrantWhatsApp(user) {
+  return isOwnerUser(user);
+}
+
+function canEditPhones(user) {
+  if (!user) return false;
+  if (isOwnerUser(user)) return true;
+  if (user.role === "vice_principal" || user.role === "principal") return true;
+  return user.canSendWhatsApp === true;
+}
+
+function canManagePhones(user) {
+  return canEditPhones(user);
+}
+
+function canManageWaTemplates(user) {
+  return canEditPhones(user);
+}
+
+function reportsFromMemory() {
+  return Array.isArray(da()?.data?.reports) ? da().data.reports : [];
+}
+
+function usersFromMemory() {
+  return Array.isArray(da()?.data?.users) ? da().data.users.slice() : [];
+}
+
+function classKeyOf(student) {
+  return student.classKey || `${student.grade || ""}|${student.classroom || student.section || ""}`;
+}
+
+function uniqueClasses(students) {
+  const map = new Map();
+  for (const student of students) {
+    const key = classKeyOf(student);
+    if (!key || key === "|") continue;
+    if (!map.has(key)) map.set(key, classLabel(student));
+  }
+  return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1], "ar"));
+}
+
+function absentIdsForDate(date) {
+  const ids = new Set();
+  for (const report of reportsFromMemory()) {
+    if (String(report.date || "") !== date) continue;
+    const entries = Array.isArray(report.entries) ? report.entries : [];
+    for (const entry of entries) {
+      if (entry && entry.status === "absent" && entry.studentId) ids.add(entry.studentId);
+    }
+  }
+  return ids;
+}
+
+function seedPhonesFromStudents(students) {
+  const map = {};
+  for (const student of students || []) {
+    const phone = String(student.parentPhone || "").trim();
+    if (student.id && phone) map[student.id] = phone;
+  }
+  return map;
+}
+
+async function loadPhoneMap(students) {
+  const map = seedPhonesFromStudents(students);
+  try {
+    const rows = await listByCollection("studentPrivate");
+    for (const row of rows) {
+      if (row.id && row.parentPhone) map[row.id] = String(row.parentPhone || "");
+    }
+    return map;
+  } catch {
+    const ids = (students || []).map((item) => item.id).filter(Boolean);
+    for (let i = 0; i < ids.length; i += 20) {
+      await Promise.all(ids.slice(i, i + 20).map(async (id) => {
+        try {
+          const doc = decodeDoc(await fsFetch(`/studentPrivate/${id}`));
+          if (doc.parentPhone) map[id] = String(doc.parentPhone);
+        } catch {
+          /* no private phone yet */
+        }
+      }));
+    }
+    return map;
+  }
+}
+
+async function saveParentPhoneOnly(student, phone) {
+  const normalized = phone ? formatLocalPhone(phone) : "";
+  if (phone && !normalizeSaudiPhone(phone)) throw new Error("رقم الجوال غير صحيح");
+  const payload = encodeFields({
+    parentPhone: normalized,
+    civilId: String(student.civilId || ""),
+  });
+  await fsFetch(
+    `/studentPrivate/${student.id}?updateMask.fieldPaths=parentPhone&updateMask.fieldPaths=civilId`,
+    { method: "PATCH", body: JSON.stringify(payload) }
+  );
+  try {
+    await fsFetch(`/students/${student.id}?updateMask.fieldPaths=parentPhone`, {
+      method: "PATCH",
+      body: JSON.stringify(encodeFields({ parentPhone: normalized })),
+    });
+  } catch {
+    /* private store is enough; never send name/grade/classroom */
+  }
+  return normalized;
+}
+
+const DEFAULT_WA_TEMPLATE = {
+  id: "builtin",
+  title: "إشعار غياب طالب",
+  text: [
+    "السلام عليكم ورحمة الله وبركاته",
+    "",
+    "نفيدكم بغياب الطالب: {اسم_الطالب}",
+    "الصف / الفصل: {الصف}",
+    "التاريخ: {التاريخ}",
+  ].join("\n"),
+};
+
+function applyWaTemplate(text, student, date) {
+  return String(text || "")
+    .split("{اسم_الطالب}").join(student?.name || "")
+    .split("{الصف}").join(classLabel(student || {}))
+    .split("{التاريخ}").join(formatHijri(date))
+    .split("{رقم_المدرسة}").join(SCHOOL_WHATSAPP_PHONE);
+}
+
+function listedWaTemplates(state) {
+  return [DEFAULT_WA_TEMPLATE, ...(state.templates || [])];
+}
+
+function selectedWaTemplate(state) {
+  return listedWaTemplates(state).find((item) => item.id === state.templateId) || DEFAULT_WA_TEMPLATE;
+}
+
+async function loadWaTemplates() {
+  try {
+    const rows = await listByCollection("whatsappTemplates");
+    return rows
+      .filter((row) => row.id && String(row.text || "").trim())
+      .sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
+  } catch {
+    return [];
+  }
+}
+
+async function saveWaTemplate(state, payload) {
+  const title = String(payload.title || "").trim() || "رسالة جاهزة";
+  const text = String(payload.text || "").trim();
+  if (text.length < 8) throw new Error("اكتب نص الرسالة الجاهزة أولاً");
+  const now = new Date().toISOString();
+  if (payload.id && payload.id !== "builtin") {
+    await fsFetch(
+      `/whatsappTemplates/${payload.id}?updateMask.fieldPaths=title&updateMask.fieldPaths=text&updateMask.fieldPaths=updatedAt`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(encodeFields({ title, text, updatedAt: now })),
+      }
+    );
+    return payload.id;
+  }
+  const created = await fsFetch("/whatsappTemplates", {
+    method: "POST",
+    body: JSON.stringify(encodeFields({
+      title,
+      text,
+      authorId: profile.id || "",
+      authorName: profile.name || "",
+      createdAt: now,
+      updatedAt: now,
+    })),
+  });
+  return decodeDoc(created).id;
+}
+
+async function deleteWaTemplate(id) {
+  if (!id || id === "builtin") return;
+  await fsFetch(`/whatsappTemplates/${id}`, { method: "DELETE" });
+}
+
+async function saveWhatsAppGrant(user, enabled) {
+  await fsFetch(`/users/${user.id}?updateMask.fieldPaths=canSendWhatsApp&updateMask.fieldPaths=updatedAt`, {
+    method: "PATCH",
+    body: JSON.stringify(encodeFields({
+      canSendWhatsApp: enabled,
+      updatedAt: new Date().toISOString(),
+    })),
+  });
+  const data = da()?.data;
+  if (data && Array.isArray(data.users)) {
+    data.users = data.users.map((item) => (
+      item.id === user.id || item.civilId === user.civilId
+        ? { ...item, canSendWhatsApp: enabled }
+        : item
+    ));
+  }
+}
+
+function renderWhatsApp(root, state) {
+  const user = profile;
+  const enabled = featureEnabled();
+  const canSend = canSendWhatsApp(user);
+  const canGrant = canGrantWhatsApp(user);
+  const canPhone = canManagePhones(user);
+  const classes = uniqueClasses(state.students);
+  const absentIds = absentIdsForDate(state.date);
+  const rows = state.students
+    .filter((student) => {
+      if (state.classKey && classKeyOf(student) !== state.classKey) return false;
+      if (state.absenteesOnly && !absentIds.has(student.id)) return false;
+      return true;
+    })
+    .sort((a, b) => `${a.grade}${a.classroom}${a.name}`.localeCompare(`${b.grade}${b.classroom}${b.name}`, "ar"));
+  const missing = rows.filter((student) => !normalizeSaudiPhone(state.phones[student.id] || "")).length;
+  const staff = usersFromMemory()
+    .filter((item) => item.role && item.role !== "student")
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ar"));
+  const sample = rows.find((item) => absentIds.has(item.id)) || rows[0] || state.students[0] || { name: "................", grade: "", classroom: "" };
+  const noticeBody = applyWaTemplate(selectedWaTemplate(state).text, sample, state.date);
+
+  root.innerHTML = `
+    <section class="fu-wrap wa-wrap">
+      <p class="fu-lead">إرسال إشعار الغياب عبر واتساب المدرسة المعتمد ${SCHOOL_WHATSAPP_PHONE}. هذه الشاشة تعرض الأسماء والصفوف والفصول الحالية ولا تعدّلها.</p>
+      ${state.error ? `<p class="fu-flash fu-error">${escapeHtml(state.error)}</p>` : ""}
+      ${state.success ? `<p class="fu-flash fu-ok">${escapeHtml(state.success)}</p>` : ""}
+      <section class="fu-card">
+        <h2>واتساب الغياب</h2>
+        <p>افتح واتساب على رقم المدرسة <strong>${SCHOOL_WHATSAPP_PHONE}</strong> قبل الإرسال. الوكيل يملك الإرسال عند تفعيل الميزة، والمالك يمنحها لأي موظف من هنا أو من صفحة المستخدمين.</p>
+        <p class="wa-status">${enabled ? "الميزة مفعّلة من إعدادات المالك." : "الميزة متوقفة. المالك يفعّلها من الإعدادات ثم يحفظ."}</p>
+      </section>
+      <section class="fu-card wa-notice-card">
+        <div class="fu-toolbar">
+          <h2>نموذج الرسالة</h2>
+          <button type="button" class="fu-btn fu-ghost" data-print-notice>طباعة النموذج</button>
+        </div>
+        ${officialNoticeCard(sample, state.date, noticeBody)}
+      </section>
+      ${!enabled && !canGrant ? `<p class="fu-empty">إرسال واتساب الغياب غير مفعّل حالياً.</p>` : `
+      ${canGrant && !canSend ? `<p class="fu-flash fu-warn">يمكنك إدارة الصلاحيات لأنك المالك. لمنح نفسك الإرسال استخدم الجدول أدناه. وكيل المدرسة يملك الإرسال دائماً بعد التفعيل.</p>` : ""}
+      ${enabled && !canSend && !canGrant ? `<p class="fu-empty">هذه الصفحة متاحة لوكيل المدرسة، أو لمن يمنحه المالك صلاحية الإرسال.</p>` : ""}
+      ${enabled ? `
+      <form class="fu-card wa-filters" data-wa-filters>
+        <label>التاريخ
+          <input type="date" name="date" value="${escapeHtml(state.date)}">
+        </label>
+        <label>الفصل
+          <select name="classKey">
+            <option value="">جميع الفصول</option>
+            ${classes.map(([key, label]) => `<option value="${escapeHtml(key)}" ${state.classKey === key ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="wa-check">
+          <input type="checkbox" name="absenteesOnly" ${state.absenteesOnly ? "checked" : ""}>
+          <span>الغائبون في هذا التاريخ فقط</span>
+        </label>
+      </form>
+      <p class="fu-lead">الغائبون: ${absentIds.size} · المعروض: ${rows.length}${missing ? ` · بدون رقم: ${missing}` : ""}</p>
+      <div class="wa-table-wrap">
+        <table class="wa-table">
+          <thead>
+            <tr>
+              <th>الطالب</th>
+              <th>الصف / الفصل</th>
+              <th>الجوال</th>
+              <th>واتساب</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.length ? rows.map((student) => {
+              const phone = state.phones[student.id] || "";
+              const absent = absentIds.has(student.id);
+              return `<tr>
+                <td><strong>${escapeHtml(student.name || "")}</strong>${absent ? `<span class="fu-chip">غائب</span>` : ""}</td>
+                <td>${escapeHtml(classLabel(student))}</td>
+                <td>
+                  <input data-phone="${escapeHtml(student.id)}" inputmode="numeric" placeholder="05xxxxxxxx" value="${escapeHtml(phone)}" ${canPhone ? "" : "readonly"}>
+                </td>
+                <td>
+                  <button type="button" class="fu-btn" data-send="${escapeHtml(student.id)}" ${canSend ? "" : "disabled"}>${state.sent.has(student.id) ? "أُرسل" : "إرسال"}</button>
+                </td>
+              </tr>`;
+            }).join("") : `<tr><td colspan="4" class="fu-empty">لا يوجد طلاب مطابقون. القائمة من الكشف الحالي دون تغيير الأسماء أو الصفوف.</td></tr>`}
+          </tbody>
+        </table>
+      </div>` : ""}
+      ${canGrant ? `
+      <section class="fu-card">
+        <h2>منح صلاحية الإرسال</h2>
+        <p>لا تُسحب من الوكيل. المالك لا يحصل عليها تلقائياً.</p>
+        <div class="wa-grant-list">
+          ${staff.map((item) => {
+            const locked = item.role === "vice_principal";
+            const on = locked || item.canSendWhatsApp === true;
+            return `<div class="wa-grant-row">
+              <div>
+                <strong>${escapeHtml(item.name || "")}</strong>
+                <small>${escapeHtml(item.role === "vice_principal" ? "وكيل المدرسة" : item.role === "owner" ? "مالك المشروع" : item.role || "")}</small>
+              </div>
+              ${locked ? `<span>وكيل — دائماً</span>` : `<button type="button" class="fu-btn ${on ? "fu-ghost" : ""}" data-grant="${escapeHtml(item.id)}" data-on="${on ? "1" : "0"}">${on ? "سحب الصلاحية" : "منح الإرسال"}</button>`}
+            </div>`;
+          }).join("")}
+        </div>
+      </section>` : ""}`}
+    </section>
+  `;
+  bindWhatsApp(root, state);
+}
+
+function bindWhatsApp(root, state) {
+  root.querySelector("[data-print-notice]")?.addEventListener("click", () => {
+    const sample = state.students.find((item) => item.id && (state.phones[item.id] || true)) || state.students[0] || { name: "................", grade: "", classroom: "" };
+    const absentIds = absentIdsForDate(state.date);
+    const chosen = state.students.find((item) => absentIds.has(item.id)) || sample;
+    printOfficialNotice(chosen, state.date, applyWaTemplate(selectedWaTemplate(state).text, chosen, state.date));
+  });
+  root.querySelector("[data-wa-filters]")?.addEventListener("change", (event) => {
+    const form = event.currentTarget;
+    state.date = form.date.value || todayIso();
+    state.classKey = form.classKey.value || "";
+    state.absenteesOnly = Boolean(form.absenteesOnly?.checked);
+    renderWhatsApp(root, state);
+  });
+  root.querySelectorAll("[data-phone]").forEach((input) => {
+    input.addEventListener("change", async () => {
+      const id = input.getAttribute("data-phone");
+      const student = state.students.find((item) => item.id === id);
+      if (!student) return;
+      try {
+        const saved = await saveParentPhoneOnly(student, input.value);
+        state.phones[id] = saved;
+        state.success = "حُفظ رقم الجوال دون تغيير اسم الطالب أو صفه أو فصله.";
+        state.error = "";
+        input.value = saved;
+      } catch (err) {
+        state.error = humanError(err);
+        state.success = "";
+        renderWhatsApp(root, state);
+      }
+    });
+  });
+  root.querySelectorAll("[data-send]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!canSendWhatsApp(profile)) {
+        state.error = "المالك يمنح صلاحية الإرسال من هذه الصفحة أو من المستخدمين.";
+        renderWhatsApp(root, state);
+        return;
+      }
+      const id = btn.getAttribute("data-send");
+      const student = state.students.find((item) => item.id === id);
+      if (!student) return;
+      const input = root.querySelector(`[data-phone="${CSS.escape(id)}"]`);
+      const raw = input ? input.value : state.phones[id] || "";
+      try {
+        if (canManagePhones(profile) && raw) {
+          state.phones[id] = await saveParentPhoneOnly(student, raw);
+        }
+      } catch (err) {
+        state.error = humanError(err);
+        state.success = "";
+        renderWhatsApp(root, state);
+        return;
+      }
+      const phone = state.phones[id] || raw;
+      const message = officialNoticeText(
+        student,
+        state.date,
+        applyWaTemplate(selectedWaTemplate(state).text, student, state.date)
+      );
+      const href = whatsappHref(phone, message);
+      if (!href) {
+        state.error = "أدخل رقم جوال صحيح قبل الإرسال.";
+        state.success = "";
+        renderWhatsApp(root, state);
+        return;
+      }
+      state.sent.add(id);
+      state.error = "";
+      state.success = `جاري فتح واتساب لإشعار ولي أمر ${student.name}.`;
+      window.open(href, "_blank", "noopener,noreferrer");
+      renderWhatsApp(root, state);
+    });
+  });
+  root.querySelectorAll("[data-grant]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.getAttribute("data-grant");
+      const enabled = btn.getAttribute("data-on") !== "1";
+      const user = usersFromMemory().find((item) => item.id === id);
+      if (!user || user.role === "vice_principal") return;
+      try {
+        await saveWhatsAppGrant(user, enabled);
+        state.success = enabled ? `مُنحت صلاحية واتساب لـ ${user.name}.` : `سُحبت صلاحية واتساب من ${user.name}.`;
+        state.error = "";
+        renderWhatsApp(root, state);
+      } catch (err) {
+        state.error = humanError(err);
+        state.success = "";
+        renderWhatsApp(root, state);
+      }
+    });
+  });
+}
+
+async function mountWhatsApp(root) {
+  const liveRoot = () => document.getElementById(root.id) || root;
+  liveRoot().innerHTML = `<p class="fu-empty">جاري التحميل...</p>`;
+  try {
+    await waitForAuth();
+    profile = getProfile();
+    if (!profile) throw new Error("تعذر قراءة حسابك. حدّث الصفحة بعد اكتمال تسجيل الدخول.");
+    let students = studentsFromMemory(profile);
+    let error = "";
+    let phones = {};
+    try {
+      if (!students.length) students = await loadStudents(profile);
+      phones = await loadPhoneMap(students);
+    } catch (err) {
+      error = humanError(err);
+      if (!students.length) students = studentsFromMemory(profile);
+    }
+    renderWhatsApp(liveRoot(), {
+      students,
+      phones,
+      date: todayIso(),
+      classKey: "",
+      absenteesOnly: true,
+      sent: new Set(),
+      error,
+      success: "",
+    });
+  } catch (err) {
+    liveRoot().innerHTML = `<p class="fu-flash fu-error">${escapeHtml(humanError(err))}</p>`;
+  }
+}
+
 function hostFor(kind) {
-  const id = kind === "homework" ? "fu-host-homework" : "fu-host-notes";
+  const id = kind === "homework" ? "fu-host-homework" : kind === "whatsapp" ? "fu-host-whatsapp" : "fu-host-notes";
   let host = document.getElementById(id);
   if (!host) {
     host = document.createElement("section");
@@ -702,18 +1248,22 @@ function injectStudentEntry() {
 }
 
 function watch() {
-  let visible = { notes: false, homework: false };
+  let visible = { notes: false, homework: false, whatsapp: false };
   let timer = 0;
   const scan = () => {
     injectStudentEntry();
     const notesOn = Boolean(document.getElementById("followup-root"));
     const hwOn = Boolean(document.getElementById("homework-root"));
+    const waOn = Boolean(document.getElementById("whatsapp-root"));
     const notesHost = hostFor("notes");
     const hwHost = hostFor("homework");
+    const waHost = hostFor("whatsapp");
     notesHost.hidden = !notesOn;
     hwHost.hidden = !hwOn;
+    waHost.hidden = !waOn;
     if (notesOn) placeHost(notesHost);
     if (hwOn) placeHost(hwHost);
+    if (waOn) placeHost(waHost);
     if (notesOn && !visible.notes) {
       visible.notes = true;
       mountStaff(notesHost, "notes");
@@ -724,6 +1274,11 @@ function watch() {
       mountStaff(hwHost, "homework");
     }
     if (!hwOn) visible.homework = false;
+    if (waOn && !visible.whatsapp) {
+      visible.whatsapp = true;
+      mountWhatsApp(waHost);
+    }
+    if (!waOn) visible.whatsapp = false;
   };
   const queued = () => {
     clearTimeout(timer);
@@ -733,8 +1288,10 @@ function watch() {
   window.addEventListener("resize", () => {
     const notesHost = document.getElementById("fu-host-notes");
     const hwHost = document.getElementById("fu-host-homework");
+    const waHost = document.getElementById("fu-host-whatsapp");
     if (notesHost) placeHost(notesHost);
     if (hwHost) placeHost(hwHost);
+    if (waHost) placeHost(waHost);
   });
   scan();
 }
