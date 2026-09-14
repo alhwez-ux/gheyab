@@ -641,8 +641,48 @@ function isOwnerUser(user) {
 
 function canSendWhatsApp(user) {
   if (!user || !featureEnabled()) return false;
-  if (user.role === "vice_principal") return true;
+  if (user.role === "vice_principal" || user.role === "owner") return true;
   return user.canSendWhatsApp === true;
+}
+
+const WA_SEND_GAP_MS = 2000;
+
+function waitMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function selectedSet(state) {
+  return state.selected instanceof Set ? state.selected : new Set(state.selected || []);
+}
+
+function absenceMessageFor(student, date, state) {
+  return officialNoticeText(
+    student,
+    date,
+    applyWaTemplate(selectedWaTemplate(state).text, student, date)
+  );
+}
+
+function openWhatsAppHref(href, existing) {
+  if (existing && !existing.closed) {
+    try {
+      existing.location.href = href;
+      existing.focus();
+      return existing;
+    } catch (_) {
+      /* open a new tab if the previous window cannot be reused */
+    }
+  }
+  const win = window.open(href, "wa-absence-send");
+  if (win) return win;
+  const link = document.createElement("a");
+  link.href = href;
+  link.target = "wa-absence-send";
+  link.rel = "noopener noreferrer";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  return existing || null;
 }
 
 function canGrantWhatsApp(user) {
@@ -873,7 +913,7 @@ function renderWhatsApp(root, state) {
       ${state.success ? `<p class="fu-flash fu-ok">${escapeHtml(state.success)}</p>` : ""}
       <section class="fu-card">
         <h2>واتساب الغياب</h2>
-        <p>افتح واتساب على رقم المدرسة <strong>${SCHOOL_WHATSAPP_PHONE}</strong> قبل الإرسال. الوكيل يملك الإرسال عند تفعيل الميزة، والمالك يمنحها لأي موظف من هنا أو من صفحة المستخدمين.</p>
+        <p>الإرسال متاح لوكيل المدرسة، وللمالك، ولمن يمنحه المالك صلاحية الإرسال من إعدادات الصلاحيات أدناه. لا يُرسل شيء إلا بعد الضغط على زر إرسال إشعارات الغياب ثم موافق.</p>
         <p class="wa-status">${enabled ? "الميزة مفعّلة من إعدادات المالك." : "الميزة متوقفة. المالك يفعّلها من الإعدادات ثم يحفظ."}</p>
       </section>
       <section class="fu-card wa-notice-card">
@@ -884,7 +924,7 @@ function renderWhatsApp(root, state) {
         ${officialNoticeCard(sample, state.date, noticeBody)}
       </section>
       ${!enabled && !canGrant ? `<p class="fu-empty">إرسال واتساب الغياب غير مفعّل حالياً.</p>` : `
-      ${canGrant && !canSend ? `<p class="fu-flash fu-warn">يمكنك إدارة الصلاحيات لأنك المالك. لمنح نفسك الإرسال استخدم الجدول أدناه. وكيل المدرسة يملك الإرسال دائماً بعد التفعيل.</p>` : ""}
+      ${canGrant && !canSend ? `<p class="fu-flash fu-warn">يمكنك منح صلاحية الإرسال من الجدول أدناه. وكيل المدرسة والمالك يملكان الإرسال بعد تفعيل الميزة.</p>` : ""}
       ${enabled && !canSend && !canGrant ? `<p class="fu-empty">هذه الصفحة متاحة لوكيل المدرسة، أو لمن يمنحه المالك صلاحية الإرسال.</p>` : ""}
       ${enabled ? `
       <form class="fu-card wa-filters" data-wa-filters>
@@ -902,39 +942,55 @@ function renderWhatsApp(root, state) {
           <span>الغائبون في هذا التاريخ فقط</span>
         </label>
       </form>
-      <p class="fu-lead">الغائبون: ${absentIds.size} · المعروض: ${rows.length}${missing ? ` · بدون رقم: ${missing}` : ""}</p>
+      <p class="fu-lead">الغائبون: ${absentIds.size} · المعروض: ${rows.length}${missing ? ` · بدون رقم: ${missing}` : ""} · المحدد: ${rows.filter((item) => selectedSet(state).has(item.id)).length}</p>
+      ${canSend ? `
+      <div class="fu-actions wa-send-bar">
+        <label class="wa-check">
+          <input type="checkbox" data-select-all ${rows.length && rows.every((item) => selectedSet(state).has(item.id)) ? "checked" : ""}>
+          <span>تحديد الكل</span>
+        </label>
+        <button type="button" class="fu-btn" data-open-send-modal ${!state.sending && rows.some((item) => selectedSet(state).has(item.id)) ? "" : "disabled"}>إرسال إشعارات الغياب</button>
+      </div>
+      <p class="wa-progress" data-send-progress ${state.sending ? "" : "hidden"}>${escapeHtml(state.progress || "")}</p>` : ""}
       <div class="wa-table-wrap">
         <table class="wa-table">
           <thead>
             <tr>
+              ${canSend ? "<th>اختيار</th>" : ""}
               <th>الطالب</th>
               <th>الصف / الفصل</th>
               <th>الجوال</th>
-              <th>واتساب</th>
             </tr>
           </thead>
           <tbody>
             ${rows.length ? rows.map((student) => {
               const phone = state.phones[student.id] || "";
               const absent = absentIds.has(student.id);
+              const picked = selectedSet(state).has(student.id);
               return `<tr>
+                ${canSend ? `<td><input type="checkbox" data-pick="${escapeHtml(student.id)}" ${picked ? "checked" : ""}></td>` : ""}
                 <td><strong>${escapeHtml(student.name || "")}</strong>${absent ? `<span class="fu-chip">غائب</span>` : ""}</td>
                 <td>${escapeHtml(classLabel(student))}</td>
                 <td>
                   <input data-phone="${escapeHtml(student.id)}" inputmode="numeric" placeholder="05xxxxxxxx" value="${escapeHtml(phone)}" ${canPhone ? "" : "readonly"}>
                 </td>
-                <td>
-                  <button type="button" class="fu-btn" data-send="${escapeHtml(student.id)}" ${canSend ? "" : "disabled"}>${state.sent.has(student.id) ? "أُرسل" : "إرسال"}</button>
-                </td>
               </tr>`;
-            }).join("") : `<tr><td colspan="4" class="fu-empty">لا يوجد طلاب مطابقون. القائمة من الكشف الحالي دون تغيير الأسماء أو الصفوف.</td></tr>`}
+            }).join("") : `<tr><td colspan="${canSend ? 4 : 3}" class="fu-empty">لا يوجد طلاب مطابقون. القائمة من الكشف الحالي دون تغيير الأسماء أو الصفوف.</td></tr>`}
           </tbody>
         </table>
+      </div>
+      ${state.confirmSend ? `
+      <div class="wa-modal-backdrop" data-send-modal>
+        <section class="wa-modal" role="dialog" aria-modal="true">
+          <p>سيتم إرسال إشعار الغياب لجميع الطلاب الذين تم اختيارهم</p>
+          <button type="button" class="fu-btn" data-confirm-send>موافق</button>
+        </section>
       </div>` : ""}
+      ` : ""}
       ${canGrant ? `
       <section class="fu-card">
         <h2>منح صلاحية الإرسال</h2>
-        <p>لا تُسحب من الوكيل. المالك لا يحصل عليها تلقائياً.</p>
+        <p>المالك يمنح صلاحية الإرسال لأي مستخدم من هنا. وكيل المدرسة يملكها دائماً بعد تفعيل الميزة.</p>
         <div class="wa-grant-list">
           ${staff.map((item) => {
             const locked = item.role === "vice_principal";
@@ -968,6 +1024,117 @@ function bindWhatsApp(root, state) {
     state.absenteesOnly = Boolean(form.absenteesOnly?.checked);
     renderWhatsApp(root, state);
   });
+  root.querySelector("[data-select-all]")?.addEventListener("change", (event) => {
+    const on = event.currentTarget.checked;
+    const picked = selectedSet(state);
+    root.querySelectorAll("[data-pick]").forEach((box) => {
+      box.checked = on;
+      const id = box.getAttribute("data-pick");
+      if (on) picked.add(id);
+      else picked.delete(id);
+    });
+    state.selected = picked;
+    const sendBtn = root.querySelector("[data-open-send-modal]");
+    if (sendBtn) sendBtn.disabled = !on || !root.querySelectorAll("[data-pick]").length;
+  });
+  root.querySelectorAll("[data-pick]").forEach((box) => {
+    box.addEventListener("change", () => {
+      const picked = selectedSet(state);
+      const id = box.getAttribute("data-pick");
+      if (box.checked) picked.add(id);
+      else picked.delete(id);
+      state.selected = picked;
+      const all = [...root.querySelectorAll("[data-pick]")];
+      const selectAll = root.querySelector("[data-select-all]");
+      if (selectAll) selectAll.checked = all.length > 0 && all.every((item) => item.checked);
+      const sendBtn = root.querySelector("[data-open-send-modal]");
+      if (sendBtn) sendBtn.disabled = !all.some((item) => item.checked);
+    });
+  });
+  root.querySelector("[data-open-send-modal]")?.addEventListener("click", () => {
+    if (!canSendWhatsApp(profile)) {
+      state.error = "إرسال إشعارات الغياب متاح لوكيل المدرسة، أو للمالك، أو لمن يمنحه المالك الصلاحية.";
+      renderWhatsApp(root, state);
+      return;
+    }
+    const picked = selectedSet(state);
+    root.querySelectorAll("[data-pick]").forEach((box) => {
+      const id = box.getAttribute("data-pick");
+      if (box.checked) picked.add(id);
+      else picked.delete(id);
+    });
+    state.selected = picked;
+    if (!picked.size) {
+      state.error = "اختر طالباً واحداً على الأقل قبل الإرسال.";
+      renderWhatsApp(root, state);
+      return;
+    }
+    state.confirmSend = true;
+    renderWhatsApp(root, state);
+  });
+  root.querySelector("[data-confirm-send]")?.addEventListener("click", async () => {
+    if (!canSendWhatsApp(profile) || state.sending) return;
+    const ids = [...selectedSet(state)];
+    const queue = [];
+    for (const id of ids) {
+      const student = state.students.find((item) => item.id === id);
+      if (!student) continue;
+      const input = root.querySelector(`[data-phone="${CSS.escape(id)}"]`);
+      const raw = input ? input.value : state.phones[id] || "";
+      if (raw) state.phones[id] = String(raw).trim();
+      const phone = state.phones[id] || raw;
+      const href = whatsappHref(phone, absenceMessageFor(student, state.date, state));
+      if (!href) continue;
+      queue.push({ student, href, raw });
+    }
+    if (!queue.length) {
+      state.confirmSend = false;
+      state.error = "لا يوجد رقم جوال صحيح للطلاب المختارين.";
+      renderWhatsApp(root, state);
+      return;
+    }
+    let waWin = openWhatsAppHref(queue[0].href);
+    state.sent.add(queue[0].student.id);
+    state.confirmSend = false;
+    state.sending = true;
+    state.progress = `جاري الإرسال 1 من ${queue.length}...`;
+    state.error = "";
+    renderWhatsApp(root, state);
+    const live = document.getElementById(root.id) || root;
+    const progress = () => live.querySelector("[data-send-progress]");
+    try {
+      for (let i = 1; i < queue.length; i += 1) {
+        await waitMs(WA_SEND_GAP_MS);
+        const node = progress();
+        if (node) {
+          node.hidden = false;
+          node.textContent = `جاري الإرسال ${i + 1} من ${queue.length}...`;
+        }
+        waWin = openWhatsAppHref(queue[i].href, waWin);
+        state.sent.add(queue[i].student.id);
+      }
+      if (canManagePhones(profile)) {
+        for (const item of queue) {
+          if (!item.raw) continue;
+          try {
+            state.phones[item.student.id] = await saveParentPhoneOnly(item.student, item.raw);
+          } catch {
+            /* keep typed number */
+          }
+        }
+      }
+      state.sending = false;
+      state.progress = "";
+      state.success = `تم تجهيز إرسال ${queue.length} إشعار غياب، بفاصل ثانيتين بين كل رسالة.`;
+      state.error = "";
+      renderWhatsApp(live, state);
+    } catch (err) {
+      state.sending = false;
+      state.error = humanError(err);
+      state.success = "";
+      renderWhatsApp(live, state);
+    }
+  });
   root.querySelectorAll("[data-phone]").forEach((input) => {
     input.addEventListener("change", async () => {
       const id = input.getAttribute("data-phone");
@@ -984,48 +1151,6 @@ function bindWhatsApp(root, state) {
         state.success = "";
         renderWhatsApp(root, state);
       }
-    });
-  });
-  root.querySelectorAll("[data-send]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      if (!canSendWhatsApp(profile)) {
-        state.error = "المالك يمنح صلاحية الإرسال من هذه الصفحة أو من المستخدمين.";
-        renderWhatsApp(root, state);
-        return;
-      }
-      const id = btn.getAttribute("data-send");
-      const student = state.students.find((item) => item.id === id);
-      if (!student) return;
-      const input = root.querySelector(`[data-phone="${CSS.escape(id)}"]`);
-      const raw = input ? input.value : state.phones[id] || "";
-      try {
-        if (canManagePhones(profile) && raw) {
-          state.phones[id] = await saveParentPhoneOnly(student, raw);
-        }
-      } catch (err) {
-        state.error = humanError(err);
-        state.success = "";
-        renderWhatsApp(root, state);
-        return;
-      }
-      const phone = state.phones[id] || raw;
-      const message = officialNoticeText(
-        student,
-        state.date,
-        applyWaTemplate(selectedWaTemplate(state).text, student, state.date)
-      );
-      const href = whatsappHref(phone, message);
-      if (!href) {
-        state.error = "أدخل رقم جوال صحيح قبل الإرسال.";
-        state.success = "";
-        renderWhatsApp(root, state);
-        return;
-      }
-      state.sent.add(id);
-      state.error = "";
-      state.success = `جاري فتح واتساب لإشعار ولي أمر ${student.name}.`;
-      window.open(href, "_blank", "noopener,noreferrer");
-      renderWhatsApp(root, state);
     });
   });
   root.querySelectorAll("[data-grant]").forEach((btn) => {
@@ -1071,6 +1196,10 @@ async function mountWhatsApp(root) {
       date: todayIso(),
       classKey: "",
       absenteesOnly: true,
+      selected: new Set(),
+      confirmSend: false,
+      sending: false,
+      progress: "",
       sent: new Set(),
       error,
       success: "",

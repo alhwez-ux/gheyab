@@ -50,6 +50,11 @@
 .wa-notice-head h3{margin:4px 0 14px;font-size:20px;color:#173c3a}
 .wa-notice-body{text-align:right;line-height:2;font-size:16px;min-height:90px}
 .wa-notice-foot{margin-top:22px;font-size:18px;font-weight:800;color:#0d6f68}
+.wa-send-bar{margin:0 0 12px}
+.wa-progress{margin:0 0 12px;font-weight:800;color:#0d6f68}
+.wa-modal-backdrop{position:fixed;inset:0;z-index:120;background:rgba(23,60,58,.45);display:grid;place-items:center;padding:20px}
+.wa-modal{background:#fff;border-radius:20px;padding:28px 24px;max-width:420px;width:100%;text-align:center;box-shadow:0 16px 40px rgba(13,111,104,.2)}
+.wa-modal p{margin:0 0 20px;font-size:18px;font-weight:800;line-height:1.8;color:#173c3a}
 .fu-host[hidden]{display:none!important}
 .fu-host{display:block;z-index:15;overflow:auto;background:#f4f7f6;padding:8px 20px 28px;min-height:280px;box-sizing:border-box}
 @media (max-width:760px){.fu-host{padding:8px 14px 24px}}
