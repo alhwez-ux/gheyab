@@ -17,6 +17,7 @@ const required = [
   "if(de)await Nj(d)}catch(err)",
   "window.setInterval(run,15e3)",
   'if(!(code==="permission-denied"||/permission-denied|insufficient permissions/i.test(msg)))throw err',
+  "تغيير كلمة المرور اختياري من هذه الصفحة",
 ];
 const forbidden = [
   't==="permission-denied"||t==="already-exists"',
@@ -24,6 +25,7 @@ const forbidden = [
   'else e?(P.synced=!0,B="ok")',
   "try{JM(i,a);if(de)await Nj(a)",
   "if(!s||!hx(de).length)return",
+  '(i.role!=="student"&&Wf(i,t.credentials)===ci)?T.jsx(daPinGate',
 ];
 
 let failed = 0;
@@ -52,8 +54,8 @@ if (!rules.includes("ownReport() && resource.data.teacherId == request.auth.uid"
 if (!rules.includes('"loginPin"')) fail("rules do not allow saving loginPin");
 
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
-if (!html.includes('BUILD = "20260927-save2"')) fail("index.html build id drifted");
-if (!html.includes("/assets/index-CuviuAWk.js?v=20260927-save2")) fail("index.html is not loading the fixed bundle");
+if (!html.includes('BUILD = "20260927-save3"')) fail("index.html build id drifted");
+if (!html.includes("/assets/index-CuviuAWk.js?v=20260927-save3")) fail("index.html is not loading the fixed bundle");
 
 if (failed) {
   console.error(failed + " check(s) failed");
