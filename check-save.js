@@ -15,12 +15,15 @@ const required = [
   'console.error("report-save",Y),ux(P,de),B="queued"',
   "if(de)await Nj(a);JM(i,a)",
   "if(de)await Nj(d)}catch(err)",
+  "window.setInterval(run,15e3)",
+  'if(!(code==="permission-denied"||/permission-denied|insufficient permissions/i.test(msg)))throw err',
 ];
 const forbidden = [
   't==="permission-denied"||t==="already-exists"',
   "!Fe?.currentUser||!te||(await a7",
   'else e?(P.synced=!0,B="ok")',
   "try{JM(i,a);if(de)await Nj(a)",
+  "if(!s||!hx(de).length)return",
 ];
 
 let failed = 0;
@@ -49,8 +52,8 @@ if (!rules.includes("ownReport() && resource.data.teacherId == request.auth.uid"
 if (!rules.includes('"loginPin"')) fail("rules do not allow saving loginPin");
 
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
-if (!html.includes('BUILD = "20260927-save1"')) fail("index.html build id drifted");
-if (!html.includes("/assets/index-CuviuAWk.js?v=20260927-save1")) fail("index.html is not loading the fixed bundle");
+if (!html.includes('BUILD = "20260927-save2"')) fail("index.html build id drifted");
+if (!html.includes("/assets/index-CuviuAWk.js?v=20260927-save2")) fail("index.html is not loading the fixed bundle");
 
 if (failed) {
   console.error(failed + " check(s) failed");
