@@ -130,16 +130,23 @@ service cloud.firestore {
     }
 
     match /reports/{reportId} {
+      function ownReport() {
+        return active()
+          && hasProfile()
+          && request.resource.data.teacherId == request.auth.uid
+          && request.resource.data.classKey is string
+          && request.resource.data.date is string
+          && request.resource.data.entries is list;
+      }
       allow read: if isAdmin()
-        || (isTeacher() && (
+        || (active() && hasProfile() && (
           resource.data.teacherId == request.auth.uid
-          || teacherClass(resource.data)
+          || (isTeacher() && teacherClass(resource.data))
         ));
-      allow create: if request.resource.data.teacherId == request.auth.uid && (
-        isAdmin()
-        || (isTeacher() && teacherClass(request.resource.data))
-      );
-      allow update: if isOwner() || isAdmin();
+      allow create: if ownReport();
+      allow update: if isOwner()
+        || isAdmin()
+        || (ownReport() && resource.data.teacherId == request.auth.uid);
       allow delete: if isOwner();
     }
 
